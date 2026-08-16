@@ -1,0 +1,19 @@
+# Model weights and backend binaries live outside the repository
+*.gguf
+*.bin
+
+# Benchmark and server output
+*.log
+logs/
+bench/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system state
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
