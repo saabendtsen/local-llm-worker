@@ -17,3 +17,7 @@ bench/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Sandbox dependency trees - configuration and notes are tracked, node_modules is not
+sandbox/**/node_modules/
+sandbox/**/package-lock.json
