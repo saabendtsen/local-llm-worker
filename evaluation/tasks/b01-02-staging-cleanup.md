@@ -1,4 +1,4 @@
-﻿---
+---
 id: b01-02-staging-cleanup
 repo: C:\Dev\homelab
 category: bugfix
@@ -18,8 +18,8 @@ test covering the fix.
 it into place with `os.replace(staging, task_dir)` only on success. Nothing anywhere in the module
 ever removes it on failure.
 
-So every rejected submit â€” bad input name, duplicate name, malformed base64, `max_input_bytes`
-exceeded, working directory outside the allowlist â€” leaks a staging directory permanently.
+So every rejected submit — bad input name, duplicate name, malformed base64, `max_input_bytes`
+exceeded, working directory outside the allowlist — leaks a staging directory permanently.
 `queued_tasks()` skips dot-prefixed directories, so the garbage is invisible and unbounded. The
 existing test suite leaks one on every run.
 
@@ -30,7 +30,7 @@ existing test suite leaks one on every run.
   tests assert on those, and they must keep passing.
 - A successful submit is unaffected: `tasks_dir` ends up containing exactly the real `{task_id}`
   directory and nothing else.
-- A new test asserts the absence of leftovers after a failure â€” asserting on
+- A new test asserts the absence of leftovers after a failure — asserting on
   `sorted(p.name for p in bridge.tasks_dir.iterdir())` is the cleanest way.
 - `python -m pytest -q tests/test_codex_task_bridge.py` passes.
 - Return a concise summary of what changed and anything left unresolved.
@@ -48,7 +48,7 @@ existing test suite leaks one on every run.
   `task_dir` instead would delete the task that was just accepted.
 - The cleanup must not swallow the exception. A bare `except Exception: cleanup; return None` makes
   `test_rejects_unsafe_input_name` and `test_rejects_working_directory_outside_allowlist` fail.
-- `base64.b64decode(..., validate=True)` raises `binascii.Error`, which subclasses `ValueError` â€”
+- `base64.b64decode(..., validate=True)` raises `binascii.Error`, which subclasses `ValueError` —
   the cleanup needs to cover that path too.
 - `shutil` is not currently imported. Adding it is expected.
 - Test conventions are as in the previous step: plain `unittest.TestCase`, temp-directory fixtures,

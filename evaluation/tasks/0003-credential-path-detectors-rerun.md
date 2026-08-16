@@ -1,4 +1,4 @@
-﻿---
+---
 id: 0003-credential-path-detectors-rerun
 repo: C:\Dev\homelab
 category: feature-small
@@ -14,7 +14,7 @@ history. Its `PATH_DETECTORS` currently recognises environment files, credential
 and private-key names.
 
 It does not recognise a family of well-known config files that routinely carry credentials and
-whose names match none of the existing patterns â€” for example `.netrc`, `.npmrc`, `.pypirc`, and
+whose names match none of the existing patterns — for example `.netrc`, `.npmrc`, `.pypirc`, and
 `kubeconfig`. A repository that committed one of these would not be flagged.
 
 Add detection for that family.
@@ -38,7 +38,7 @@ Add detection for that family.
   is not falsely flagged.
 - New tests cover both the positive and the negative case, following the existing style in
   `tests/test_inventory_git_credential_exposure.py`.
-- `python -m pytest -q` passes â€” the whole suite, not only the new tests.
+- `python -m pytest -q` passes — the whole suite, not only the new tests.
 - Return a concise summary of what changed and anything left unresolved.
 
 ## Notes

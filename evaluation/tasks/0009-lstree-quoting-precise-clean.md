@@ -1,4 +1,4 @@
-﻿---
+---
 id: 0009-lstree-quoting-precise-clean
 repo: C:\Dev\homelab
 category: bugfix
@@ -9,7 +9,7 @@ base: experiment/74-local-llm-worker
 ---
 
 <!--
-FRAMING VARIANT 2 of 3 â€” PRECISE IMPERATIVE.
+FRAMING VARIANT 2 of 3 — PRECISE IMPERATIVE.
 Names the files and states the target behaviour exactly, but gives no
 implementation approach, no edge-case warning, and no test conventions.
 -->
@@ -25,7 +25,7 @@ The `inventory()` function classifies each candidate path with a `status` field 
 `current` (present in HEAD) or `history-only` (only reachable in history). The set it checks
 membership against is built from a `git ls-tree` call whose output is subject to Git's C-style
 path quoting. Candidate paths are decoded differently, so the two representations do not match
-for any path Git chooses to quote â€” non-ASCII paths in particular.
+for any path Git chooses to quote — non-ASCII paths in particular.
 
 The result: a file that *is* tracked in HEAD is reported as `history-only`.
 
@@ -35,7 +35,7 @@ The result: a file that *is* tracked in HEAD is reported as `history-only`.
   name, including non-ASCII ones.
 - A path that was committed and later removed must still report `history-only`.
 - A new test covers the non-ASCII case.
-- `python -m pytest -q` passes â€” the whole suite, not only the new test.
+- `python -m pytest -q` passes — the whole suite, not only the new test.
 - Return a concise summary of what changed and anything left unresolved.
 
 ## Constraints

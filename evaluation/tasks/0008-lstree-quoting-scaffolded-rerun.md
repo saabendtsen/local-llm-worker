@@ -1,4 +1,4 @@
-﻿---
+---
 id: 0008-lstree-quoting-scaffolded-rerun
 repo: C:\Dev\homelab
 category: bugfix
@@ -9,7 +9,7 @@ base: experiment/74-local-llm-worker
 ---
 
 <!--
-FRAMING VARIANT 3 of 3 â€” FULLY SCAFFOLDED.
+FRAMING VARIANT 3 of 3 — FULLY SCAFFOLDED.
 Same defect as 0004 and 0005, plus: the exact line, the approach to take, the
 careless-fix trap called out explicitly, and the test module's conventions.
 This is the "notes are cheap, supply them" end of the gradient.
@@ -28,9 +28,9 @@ In `inventory()`, the set of paths present in HEAD is built like this:
 head_paths = set(str(git(repository, "ls-tree", "-r", "--name-only", "HEAD")).splitlines())
 ```
 
-That call omits `-z`, so Git applies C-style quoting to any path it considers unusual â€” a
+That call omits `-z`, so Git applies C-style quoting to any path it considers unusual — a
 non-ASCII filename comes back as `"hemmelig-v\303\246rdi.env"` rather than
-`hemmelig-vÃ¦rdi.env`. Candidate paths elsewhere in the module are read with `-z` and decoded with
+`hemmelig-værdi.env`. Candidate paths elsewhere in the module are read with `-z` and decoded with
 `surrogateescape`, so the two representations never match and a tracked file is misreported as
 `history-only`.
 
@@ -40,7 +40,7 @@ non-ASCII filename comes back as `"hemmelig-v\303\246rdi.env"` rather than
   name, including non-ASCII ones.
 - A path that was committed and later removed must still report `history-only`.
 - New tests cover the non-ASCII case and the removed-path case.
-- `python -m pytest -q` passes â€” the whole suite, not only the new tests.
+- `python -m pytest -q` passes — the whole suite, not only the new tests.
 - Return a concise summary of what changed and anything left unresolved.
 
 ## Constraints
@@ -55,7 +55,7 @@ non-ASCII filename comes back as `"hemmelig-v\303\246rdi.env"` rather than
   existing `-z` call whose result is wrapped as `bytes(...)`, decoded with
   `.decode("utf-8", errors="surrogateescape")`, and split on `"\0"`. Follow that shape:
   `git(repository, "ls-tree", "-r", "--name-only", "-z", "HEAD", text=False)`. Note `-z` output
-  ends with a trailing NUL, so drop empty fields â€” the module's own loop shows the
+  ends with a trailing NUL, so drop empty fields — the module's own loop shows the
   `if not path: continue` convention.
 - **Do not fix this with a filesystem check.** `(repository / path).exists()` looks equivalent and
   is wrong twice: an untracked leftover file on disk would report `current`, and a path deleted in
