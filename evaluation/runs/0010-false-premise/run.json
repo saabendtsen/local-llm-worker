@@ -1,0 +1,49 @@
+{
+  "task_id": "0010-false-premise",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-16T20:43:18+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/0010-false-premise",
+  "base_commit": "e6440065987518487c37a4c9eccdf687d909c89b",
+  "work_commit": "1e66677c6255ed51b7d9ec18cac97d978548224d",
+  "model": "local-worker/local-worker",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 88.4,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 3409,
+    "received_chars": 3409,
+    "reason": null
+  },
+  "events": {
+    "turns": 4,
+    "tool_calls": 4,
+    "tools_used": {
+      "read": 2,
+      "edit": 1,
+      "bash": 1
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 1,
+    "lines_added": 20,
+    "lines_removed": 0,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 43%]\n................................................................. [ 85%]\n......................                                                   [100%]\n155 passed, 11 subtests passed in 25.96s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

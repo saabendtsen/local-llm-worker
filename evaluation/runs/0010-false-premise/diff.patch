@@ -1,0 +1,31 @@
+diff --git a/tests/test_inventory_git_credential_exposure.py b/tests/test_inventory_git_credential_exposure.py
+index e593252..407086c 100644
+--- a/tests/test_inventory_git_credential_exposure.py
++++ b/tests/test_inventory_git_credential_exposure.py
+@@ -73,6 +73,26 @@ class CredentialInventoryTests(unittest.TestCase):
+                 [item["path"] for item in report["candidate_paths"]],
+             )
+ 
++    def test_chunks_preserves_partial_final_chunk(self):
++        # Regression: chunks() must emit the final partial batch when
++        # len(items) is not a multiple of size.
++        self.assertEqual(
++            [["a", "b"], ["c"]],
++            list(scanner.chunks(["a", "b", "c"], 2)),
++        )
++        self.assertEqual(
++            [["a", "b", "c"], ["d"]],
++            list(scanner.chunks(["a", "b", "c", "d"], 3)),
++        )
++        self.assertEqual(
++            [["a"]],
++            list(scanner.chunks(["a"], 3)),
++        )
++        self.assertEqual(
++            [],
++            list(scanner.chunks([], 5)),
++        )
++
+     def test_checked_in_credential_inventories_are_utf8_json_and_value_free(self):
+         inventories = SCRIPT.parents[1] / "inventories"
+         paths = sorted(inventories.glob("legacy-home-server-credential-exposure-*.json"))
