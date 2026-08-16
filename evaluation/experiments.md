@@ -443,6 +443,75 @@ where the tempting move is to do the easy half and quietly omit the rest.
 
 ---
 
+## E6 — Feature build, two harnesses compared
+
+**Status:** running, 2026-08-16 overnight
+
+**Question.** Everything measured so far has been bugfixes — small, with one right answer. Can the
+worker build a *feature*, where the specification fixes the outcome but not the design? And does
+[little-coder](https://github.com/itayinbarr/little-coder), which is Pi plus ~34 extensions, do it
+any better than bare Pi?
+
+**The task.** [`f01-migration-coverage-report.md`](tasks/f01-migration-coverage-report.md) — a new
+`scripts/report-migration-coverage.py` joining the migration-unit registry against all eight
+disposition ledgers, plus its test module.
+
+Genuinely wanted rather than invented: nothing in the workspace reads more than one ledger, so
+"does every migration unit have exactly one reviewed disposition?" currently means opening nine
+files by hand. The registry still advertises `pending_disposition_count: 1613` because it predates
+every ledger.
+
+**Ground truth was computed before the task was written**, not taken from reconnaissance — after
+losing a run this morning to a premise that turned out false. Verified: 1613 units, 8 ledgers, 0
+undecided, 0 duplicates, 0 unknown; aggregates `migrate 61, consolidate 114, archive 209, retain in
+place 264, discard 965`. Branch baseline `154 passed, 11 subtests`. The task states these as the
+bar and tells the worker not to adjust them to match its output.
+
+**Precise on what, silent on how.** Six decisions are left genuinely open: ledger discovery,
+output format, whether kinds are a mapping or a list of records, whether incomplete coverage exits
+non-zero, anomaly granularity, and whether each ledger's own summary is recomputed. **Divergence
+there is the point** — two identical implementations would tell us nothing.
+
+Three known attractors are stated as *required outputs*, never as warnings, following E2's finding
+that enumerating cases beats describing mistakes:
+
+1. The registry carries `"disposition": "pending"` on every one of the 1613 units. Reading
+   dispositions from it produces a confidently 0%-covered report that still passes a shallow test.
+2. Identifiers look like they encode kind (`repository-*`, `service-*`, `skill-*`) but `physical-*`
+   spans five kinds across 818 units, so prefix inference is wrong.
+3. The natural one-liner collapsing decisions into a dict keyed by id silently discards the
+   duplicate evidence the tool exists to surface.
+
+**Arms.** All three driven from the *same task file* via `--id`/`--branch` overrides, so the
+prompts are provably identical rather than merely intended to match. Serial, since the model server
+has a single slot. All pinned to the same base.
+
+| Arm | Harness | Purpose |
+| --- | --- | --- |
+| A | Pi 0.84.2 | baseline |
+| B | little-coder (sandboxed, bundles Pi 0.83) | does the extension layer help |
+| C | Pi 0.84.2, repeat | variance — which has swamped every signal so far |
+
+Arm C matters. The same task under the same framing has already produced a clean fix in one run
+and nothing at all in another. Declaring a harness better from one run each would repeat the
+mistake this project has made repeatedly.
+
+**Results.**
+
+| Arm | Wall clock | Turns | Tools | Diff | Suite | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| A — Pi | 1396.5 s (23 min) | 64 | 75 | 2 files created, +773 | **181 passed, 57 subtests** | pending review |
+| B — little-coder | pending | | | | | |
+| C — Pi repeat | pending | | | | | |
+
+Arm A built both files and added 27 tests over the 154 baseline. Tool mix was shell-heavy: bash 45,
+edit 15, read 13, write 2. No errored turns, prompt delivery verified.
+
+**Reviews pending.** Each arm gets a blind review in an isolated worktree, checking the three
+attractors empirically and mutation-testing the tests — then a head-to-head comparison.
+
+---
+
 ## Settled questions
 
 - **Is the MoE genuinely sparse at runtime?** Yes, proven by a memory-bandwidth argument — a dense
