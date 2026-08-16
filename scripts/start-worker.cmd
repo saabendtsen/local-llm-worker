@@ -19,6 +19,11 @@ if not defined UBATCH     set "UBATCH=2048"
 if not defined LOADMODE   set "LOADMODE=mmap+mlock"
 if not defined CORS       set "CORS=localhost"
 if not defined EFFORT     set "EFFORT=default"
+rem Hard ceiling on thinking tokens per response. Not a preference -- a safety
+rem valve. A run once spent its entire 32k output budget reasoning about a
+rem three-line fix and returned nothing after 23 minutes, and because it changed
+rem nothing the already-green suite still reported success. -1 is unrestricted.
+if not defined THINK_MAX  set "THINK_MAX=4096"
 
 if not exist "%LLAMA_BIN%" (
     echo ERROR: llama-server not found at "%LLAMA_BIN%".
@@ -38,6 +43,7 @@ echo   model    : %MODEL%
 echo   endpoint : http://%HOST%:%PORT%/v1  (model name: %ALIAS%)
 echo   context  : %CTX%    cpu-moe layers: %NCMOE%    threads: %THREADS%
 echo   batch    : %BATCH% / %UBATCH%    load mode: %LOADMODE%
+echo   thinking : effort=%EFFORT%  budget=%THINK_MAX%
 echo.
 
 "%LLAMA_BIN%" ^
@@ -57,6 +63,7 @@ echo.
     --load-mode %LOADMODE% ^
     --cors-origins %CORS% ^
     --reasoning-effort %EFFORT% ^
+    --reasoning-budget %THINK_MAX% ^
     -np 1 ^
     --jinja
 

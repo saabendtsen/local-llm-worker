@@ -118,10 +118,19 @@ Qwen 3.6 thinks before answering, and llama-server returns that trace as
   a full token count — reasoning consumed the whole budget before the answer began. If replies
   come back blank, suspect the limit before suspecting the model.
 
-If reasoning latency proves to dominate, `EFFORT` in `scripts\start-worker.cmd` maps to
-llama-server's `--reasoning-effort`. Treat lowering it as an experiment to record, not a default:
-thinking is likely part of why the model can implement at all, and trading it away to make a bad
-diff arrive faster is not a win.
+- **Reasoning can run away entirely.** One run spent its *whole* 32,000-token output budget
+  thinking about a three-line fix, stopped mid-sentence with `stop: "length"`, and took no action
+  in 23 minutes. Two turns, two file reads, nothing else. And because it changed nothing, the
+  already-green suite reported `verify: passed` — a 23-minute no-op recorded as a success.
+
+`THINK_MAX` in `scripts\start-worker.cmd` maps to llama-server's `--reasoning-budget` and defaults
+to 4096. It is a safety valve, not a preference: it converts "silently thinks forever and returns
+nothing" into "thinks up to the budget, then acts". `EFFORT` maps to `--reasoning-effort` and is
+the softer dial.
+
+Treat *lowering* effort as an experiment to record, not a default — thinking is likely part of why
+the model can implement at all, and trading it away to make a bad diff arrive faster is not a win.
+The budget is different: it bounds a catastrophic failure rather than trading quality for speed.
 
 ## Other rough edges
 
