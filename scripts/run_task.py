@@ -153,7 +153,15 @@ def _npm_global_roots() -> list[Path]:
     return roots
 
 
-def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: int) -> dict:
+# Everything except bash. The worker can read, search, and edit, and cannot
+# execute a shell command at all -- so no `rm` can reach anything, inside the
+# repository or outside it. Pi's controls are tool-level, so a single command
+# cannot be denied; dropping the whole tool is the available boundary.
+NO_SHELL_TOOLS = "read,edit,write,grep,find,ls"
+
+
+def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: int,
+               allow_shell: bool = True) -> dict:
     """Run Pi headless against the repository, streaming its JSON events to disk."""
     cmd = [
         *find_pi(),
@@ -162,8 +170,10 @@ def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: 
         "--exclude-tools", "ask_question",  # headless: a question would hang forever
         "--mode", "json",
         "--model", model,
-        "-p", prompt,
     ]
+    if not allow_shell:
+        cmd += ["--tools", NO_SHELL_TOOLS]
+    cmd += ["-p", prompt]
 
     started = time.monotonic()
     timed_out = False
@@ -359,6 +369,13 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=3600, help="worker timeout in seconds")
     parser.add_argument("--verify-timeout", type=int, default=900)
     parser.add_argument(
+        "--no-shell",
+        action="store_true",
+        help="deny the worker the bash tool entirely. It can still read, search and edit, but "
+             "cannot run any command -- so a mistaken path cannot destroy anything. Pair with a "
+             "pipeline that runs the tests, since the worker can no longer run them itself.",
+    )
+    parser.add_argument(
         "--keep-branch",
         action="store_true",
         help="leave the work branch checked out instead of reporting how to inspect it",
@@ -428,8 +445,12 @@ def main() -> int:
 
     git(repo, "checkout", "-q", "-b", branch)
 
+    allow_shell = not (args.no_shell or meta.get("shell", "").lower() in {"no", "false", "off"})
+    print(f"shell  : {'enabled' if allow_shell else 'DENIED (read/edit/write only)'}")
+    print()
     print("running worker...")
-    worker = run_worker(repo, prompt, args.model, run_dir / "events.jsonl", args.timeout)
+    worker = run_worker(repo, prompt, args.model, run_dir / "events.jsonl", args.timeout,
+                        allow_shell=allow_shell)
     print(f"  finished in {worker['elapsed_seconds']}s (exit {worker['exit_code']})")
     if worker["timed_out"]:
         print(f"  TIMED OUT after {args.timeout}s")
@@ -482,6 +503,7 @@ def main() -> int:
         "base_commit": base_commit,
         "work_commit": work_commit,
         "model": args.model,
+        "shell_allowed": allow_shell,
         "worker": worker,
         "prompt_delivery": delivery,
         "events": events,
