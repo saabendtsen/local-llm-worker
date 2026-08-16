@@ -1,0 +1,97 @@
+{
+  "batch_id": "b01-codex-bridge",
+  "recorded_at": "2026-08-16T19:43:58+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "batch/b01-codex-bridge",
+  "base_commit": "ae957ca08d160c1fb063a1f4ffd9bb4ab7ada340",
+  "model": "local-worker/local-worker",
+  "steps_planned": 2,
+  "steps_run": 2,
+  "halted_at_step": null,
+  "steps": [
+    {
+      "index": 1,
+      "task_id": "b01-01-input-name-validation",
+      "task_file": "evaluation\\tasks\\b01-01-input-name-validation.md",
+      "category": "bugfix",
+      "worker": {
+        "elapsed_seconds": 115.8,
+        "exit_code": 0,
+        "timed_out": false,
+        "stderr_tail": ""
+      },
+      "prompt_delivery": {
+        "verified": true,
+        "sent_chars": 2269,
+        "received_chars": 2269,
+        "reason": null
+      },
+      "events": {
+        "turns": 5,
+        "tool_calls": 5,
+        "tools_used": {
+          "read": 2,
+          "edit": 2,
+          "bash": 1
+        },
+        "malformed_event_lines": 0,
+        "errored_turns": 0
+      },
+      "diff": {
+        "files_changed": 2,
+        "lines_added": 43,
+        "lines_removed": 1,
+        "files_created": []
+      },
+      "commit": "f82053327fb13abe4047b391ae8a708ef72de0f3",
+      "verify": {
+        "command": "python -m pytest -q tests/test_codex_task_bridge.py",
+        "exit_code": 0,
+        "passed": true,
+        "output_tail": ".......                                                           [100%]\n7 passed, 7 subtests passed in 0.39s"
+      }
+    },
+    {
+      "index": 2,
+      "task_id": "b01-02-staging-cleanup",
+      "task_file": "evaluation\\tasks\\b01-02-staging-cleanup.md",
+      "category": "bugfix",
+      "worker": {
+        "elapsed_seconds": 258.2,
+        "exit_code": 0,
+        "timed_out": false,
+        "stderr_tail": ""
+      },
+      "prompt_delivery": {
+        "verified": true,
+        "sent_chars": 2450,
+        "received_chars": 2450,
+        "reason": null
+      },
+      "events": {
+        "turns": 9,
+        "tool_calls": 9,
+        "tools_used": {
+          "edit": 4,
+          "read": 3,
+          "bash": 2
+        },
+        "malformed_event_lines": 0,
+        "errored_turns": 0
+      },
+      "diff": {
+        "files_changed": 2,
+        "lines_added": 62,
+        "lines_removed": 37,
+        "files_created": []
+      },
+      "commit": "89f1ae44d0a7dea83daaf5b9e090836eac3f8311",
+      "verify": {
+        "command": "python -m pytest -q tests/test_codex_task_bridge.py",
+        "exit_code": 0,
+        "passed": true,
+        "output_tail": "........                                                          [100%]\n8 passed, 7 subtests passed in 0.41s"
+      }
+    }
+  ]
+}

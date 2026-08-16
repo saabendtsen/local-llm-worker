@@ -1,0 +1,66 @@
+diff --git a/scripts/codex_task_server.py b/scripts/codex_task_server.py
+index b42a414..18ddf69 100644
+--- a/scripts/codex_task_server.py
++++ b/scripts/codex_task_server.py
+@@ -106,7 +106,13 @@ class Bridge:
+         seen_names: set[str] = set()
+         for item in request.get("inputs", []):
+             name = item.get("name", "")
+-            if Path(name).name != name or name in seen_names:
++            if (
++                not name
++                or name in {".", ".."}
++                or "/" in name
++                or "\\" in name
++                or name in seen_names
++            ):
+                 raise ValueError(f"invalid or duplicate input name: {name!r}")
+             seen_names.add(name)
+             payload = base64.b64decode(item.get("content_base64", ""), validate=True)
+diff --git a/tests/test_codex_task_bridge.py b/tests/test_codex_task_bridge.py
+index eb69b95..0e25e87 100644
+--- a/tests/test_codex_task_bridge.py
++++ b/tests/test_codex_task_bridge.py
+@@ -127,6 +127,42 @@ print('{\"type\":\"result\",\"ok\":true}')
+                 }
+             )
+ 
++    def test_rejects_pathological_input_names(self):
++        rejected = ["", ".", "..", "foo/bar", "foo\\bar"]
++        inputs = {"name": "", "content_base64": base64.b64encode(b"x").decode()}
++        for name in rejected:
++            with self.subTest(name=name):
++                item = {**inputs, "name": name}
++                with self.assertRaisesRegex(
++                    ValueError, r"invalid or duplicate input name:"
++                ):
++                    self.bridge.submit(
++                        {
++                            "prompt": "inspect",
++                            "cwd": str(self.allowed),
++                            "mode": "inspect",
++                            "inputs": [item],
++                        }
++                    )
++
++    def test_accepts_dot_prefixed_names(self):
++        for name in [".gitignore", ".env.sample"]:
++            with self.subTest(name=name):
++                status = self.bridge.submit(
++                    {
++                        "prompt": "inspect",
++                        "cwd": str(self.allowed),
++                        "mode": "inspect",
++                        "inputs": [
++                            {
++                                "name": name,
++                                "content_base64": base64.b64encode(b"x").decode(),
++                            }
++                        ],
++                    }
++                )
++                self.assertEqual("queued", status["state"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

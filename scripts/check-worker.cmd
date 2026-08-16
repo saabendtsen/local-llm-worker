@@ -9,10 +9,15 @@ if not defined PORT set "PORT=8000"
 set "BASE=http://%HOST%:%PORT%"
 
 echo == health ==
-curl.exe -s --max-time 10 "%BASE%/health"
+rem -f matters: without it curl exits 0 for ANY completed exchange, including the
+rem 503 the server returns while the model is still loading. A health check that
+rem passes 47 seconds early sends every request into a server that is not there
+rem yet, and the run looks like a model that refused to act.
+curl.exe -sf --max-time 10 "%BASE%/health"
 if errorlevel 1 (
     echo.
-    echo ERROR: no response from %BASE%. Is start-worker.cmd running?
+    echo ERROR: %BASE% is not ready. Either start-worker.cmd is not running,
+    echo or the model is still loading ^(that takes 20-55 seconds^).
     exit /b 1
 )
 echo.

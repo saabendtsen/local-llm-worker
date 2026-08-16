@@ -171,9 +171,60 @@ prevent the drift that a single long session would accumulate?
 3. If both steps pass, the batch shape is viable and the next question is how many steps it
    survives before drift appears.
 
-**Result.** _Pending._
+**Result.** **The batch shape works.** Both steps clean, and step 2 built coherently on step 1.
 
-**Learning.** _Pending._
+| Step | Wall clock | Turns | Diff | Verify | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| 1 — reject unsafe input names | 115.8 s | 5 | 2 files, +43/−1 | passed | **CLEAN** |
+| 2 — clean up staging on failure | 258.2 s | 9 | 2 files, +62/−37 | passed | **CLEAN** |
+
+Six minutes for two dependent steps, with no frontier involvement between them. Suite green at 157.
+
+**Coherence held.** Step 2's alarming −37 was pure re-indentation: it wrapped the body of
+`Bridge.submit` in a `try:` and shifted it four spaces. `git diff -w` collapses the whole commit to
+three semantic hunks — `import shutil`, the `try:`, and an `except Exception:` that removes the
+staging directory and re-raises. Step 1's guard survives verbatim inside it. **Zero lines were
+semantically removed.** The combined result reads as one change a human would plausibly write in a
+single pass.
+
+**All five mutants were caught**, including the traps:
+
+| Mutant | Caught |
+| --- | --- |
+| Revert step 1's implementation, keep its tests | yes |
+| Revert step 2's implementation, keep its tests | yes |
+| **Step 1 trap:** `os.path.basename(name) != name` | **yes — including the `".."` hole** |
+| **Step 2 trap:** blanket `finally: shutil.rmtree(staging)` | yes, breaks 3 pre-existing tests |
+| Step 2 trap: swallow the exception and return `None` | yes |
+
+**Predictions checked.** Prediction 1 (step 1 is where a careless `basename` fix lands) — the
+worker did not fall for it, and its tests catch it. Prediction 2 (naive `finally` breaks the happy
+path) — confirmed by mutation, exactly as expected. Prediction 3 (if both pass, the shape is
+viable) — met.
+
+**One residual defect the reviewer found**, outside the stated criteria but worth recording: names
+that are OS-invalid yet not covered by the guard — `'  '`, `'.  '`, `'a*b'`, `'x \n'` — still
+escape as `PermissionError` or `OSError`. `main()` catches only `ValueError`, `FileNotFoundError`,
+and `json.JSONDecodeError`, so those still kill the CLI with a traceback rather than the
+`{"error": ...}` envelope. Step 1's acceptance criteria were fully met; the root cause is only
+partly closed.
+
+**Learning.**
+
+1. **Batching works, and the breaker earns its place.** On the first attempt the breaker halted a
+   batch whose step 1 had produced nothing — which turned out to be a harness bug rather than a
+   model failure, but halting was still correct. Without it, step 2 would have run on a base where
+   nothing had happened.
+2. **Enumerating the cases beats warning about the trap.** This is the important one, and it
+   sharpens [E4](#e4--test-first-loop-with-deterministic-gates). In E1's run 0008 the task
+   *warned* about the `exists()` trap and the worker still wrote a test that missed it. Here the
+   acceptance criteria *listed the exact inputs that must be rejected* — `""`, `"."`, `".."`,
+   separators — and the resulting tests enumerate them and catch the trap. The difference is not
+   how emphatically the trap is described; it is whether the task states the **cases a test must
+   cover** rather than the **mistake an implementer should avoid**.
+3. Re-indentation makes diff statistics lie. `+62/−37` looked like deletion and was not. Any
+   automated scorer using diff size as a signal needs `-w`, or it will flag every wrapped block as
+   destructive.
 
 ---
 
@@ -255,9 +306,20 @@ not need `bash` (`--no-shell`, see `scripts/run_task.py`). Three benefits at onc
    wasted turns is right.
 4. Whether removing the shell hurts anything not anticipated.
 
+**Refinement from E2, recorded before E4 runs.** E2's tests *did* catch their traps, unlike E1's.
+The difference was not emphasis but form: E2's acceptance criteria **enumerated the exact inputs
+that must be rejected**, so the tests enumerate them too. E1's task *warned about a mistake to
+avoid*, and the worker avoided it in the implementation without testing for it. So E4 tasks must
+state the **cases a test must cover**, not the **error an implementer should not make**. This may
+weaken E4's premise — if enumerating cases is sufficient, test-first buys less than expected, and
+E4 should measure that honestly rather than assume the gate is needed.
+
 **Predictions, recorded in advance.**
 1. The must-fail gate will fire regularly. On the E1 evidence, tests written without a failing-first
-   requirement are often non-discriminating.
+   requirement are often non-discriminating. **E2 is evidence against this** — its tests caught
+   every mutant without any failing-first requirement. If the gate rarely fires, the honest
+   conclusion is that enumerated acceptance criteria already do the work and test-first is
+   ceremony.
 2. Turn counts will fall substantially without a shell, because a large fraction of observed tool
    calls are test-running and self-checking rather than editing.
 3. The risk is the worker writing a test that fails for the *wrong reason* — a syntax error or a

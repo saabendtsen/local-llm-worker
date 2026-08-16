@@ -213,6 +213,7 @@ def summarise_events(events_path: Path) -> dict:
     tool_calls = 0
     tools_used: dict[str, int] = {}
     malformed = 0
+    errored_turns = 0
 
     with events_path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -224,6 +225,14 @@ def summarise_events(events_path: Path) -> dict:
             except json.JSONDecodeError:
                 malformed += 1
                 continue
+
+            # An assistant turn that ends in `error` produced nothing: the
+            # request failed. A whole run of these looks like a model that
+            # refused to act, when in fact the server was unreachable or still
+            # loading. Count them so the difference is visible in the record.
+            message = event.get("message")
+            if isinstance(message, dict) and message.get("stopReason") == "error":
+                errored_turns += 1
 
             kind = event.get("type")
             if kind == EVENT_TURN:
@@ -238,6 +247,7 @@ def summarise_events(events_path: Path) -> dict:
         "tool_calls": tool_calls,
         "tools_used": dict(sorted(tools_used.items(), key=lambda kv: -kv[1])),
         "malformed_event_lines": malformed,
+        "errored_turns": errored_turns,
     }
 
 
@@ -457,6 +467,11 @@ def main() -> int:
 
     events = summarise_events(run_dir / "events.jsonl")
     print(f"  {events['turns']} turns, {events['tool_calls']} tool calls")
+
+    if events["errored_turns"]:
+        print(f"  WARNING: {events['errored_turns']} turn(s) ended in an API error.")
+        print("           The server was unreachable, still loading, or rejected the request.")
+        print("           Score this as a HARNESS FAILURE, not a model result.")
 
     delivery = prompt_delivery(run_dir / "events.jsonl", prompt)
     if not delivery["verified"]:
