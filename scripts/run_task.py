@@ -397,6 +397,28 @@ def main() -> int:
     branch = meta.get("branch", f"worker/{task_id}")
     base_commit = git(repo, "rev-parse", "HEAD").strip()
 
+    # Record the starting branch by NAME. Restoring with `git checkout -` looks
+    # equivalent and is not: `-` resolves @{-1}, which any other checkout in the
+    # repository silently rewrites. A review agent inspecting an older branch
+    # once left @{-1} pointing at it, so the next run branched off a previous
+    # run's work instead of the base -- and started with the defect already
+    # fixed. That run looked plausible and was worthless as a measurement.
+    original_branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+
+    # Branch from an explicitly named base when the task states one, rather than
+    # from whatever happens to be checked out. Without this a run silently
+    # inherits an earlier run's work and measures nothing -- it has already
+    # happened twice, and both times the record looked entirely plausible:
+    # passing suite, sensible diff, reasonable turn count.
+    base = meta.get("base")
+    if base:
+        if not git(repo, "rev-parse", "--verify", "--quiet", base, check=False).strip():
+            print(f"ERROR: base {base!r} does not exist in {repo}", file=sys.stderr)
+            return 2
+        git(repo, "checkout", "-q", base)
+        base_commit = git(repo, "rev-parse", "HEAD").strip()
+        print(f"base   : {base} ({base_commit[:7]})")
+
     run_dir.mkdir(parents=True)
     print(f"task   : {task_id} ({meta['category']})")
     print(f"repo   : {repo}")
@@ -469,7 +491,7 @@ def main() -> int:
     (run_dir / "run.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
     if not args.keep_branch:
-        git(repo, "checkout", "-q", "-")
+        git(repo, "checkout", "-q", original_branch)
 
     print()
     print(f"recorded: {run_dir}")

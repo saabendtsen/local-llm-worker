@@ -91,6 +91,8 @@ def main() -> int:
 
     branch = f"batch/{args.id}"
     base_commit = git(repo, "rev-parse", "HEAD").strip()
+    # By name, not `git checkout -`; see the note in run_task.py.
+    original_branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
     batch_dir.mkdir(parents=True)
 
     print(f"batch  : {args.id}  ({len(parsed)} steps)")
@@ -181,7 +183,7 @@ def main() -> int:
     }
     (batch_dir / "batch.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
-    git(repo, "checkout", "-q", "-")
+    git(repo, "checkout", "-q", original_branch)
 
     completed = sum(1 for step in steps if step["verify"].get("passed", False))
     print()

@@ -24,6 +24,10 @@ Frontmatter fields:
   complexity rough size: small | medium
   verify     the acceptance command; its exit code decides pass/fail
   branch     optional; defaults to worker/<id>
+  base       optional but strongly recommended: the branch to start from.
+             Without it the run branches from whatever is checked out, which
+             has twice meant silently inheriting an earlier run's work and
+             measuring nothing. Set it whenever the run is a measurement.
 -->
 
 # Task: <short title>
