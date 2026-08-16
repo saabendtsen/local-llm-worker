@@ -65,41 +65,46 @@ pi -a --no-session --exclude-tools ask_question --mode json --model local-worker
 | `--exclude-tools ask_question` | **Essential.** With no human attached, a question would hang until the timeout and burn the run. |
 | `--mode json` | One JSON object per line: `turn_end` counts iterations, `tool_execution_end` counts tool calls. This is where the evaluation metrics come from. |
 
-## What the model actually does with tools
+## Never launch Pi through the Windows shim
 
-The first measured run is the most useful thing learned so far. Asked to add a function and a
-test, the worker used **8 bash calls and 2 read calls — and zero edit or write calls**. It made
-its changes like this:
+`shutil.which("pi")` resolves to `pi.CMD`. Launching a `.CMD` hands the argument list to
+`cmd.exe`, **which truncates any argument at its first newline** — so a multi-line task prompt
+arrives as its first line only.
 
-```sh
-cat >> greet.py << 'EOF'
+This is not hypothetical. It cost two runs that were initially recorded as model failures: the
+worker received only a task's title line, did something plausible and irrelevant with it, and the
+result read as a comprehension failure. See
+[../evaluation/results.md](../evaluation/results.md).
 
-def shout(name):
-    return greet(name).upper()
-EOF
+`scripts/run_task.py` therefore resolves the package's JS entry point and runs it under `node`
+directly:
 
-sed -i 's/from greet import greet/from greet import greet, shout/' test_greet.py
+```text
+node <npm-global>/@earendil-works/pi-coding-agent/dist/cli.js -a --no-session ...
 ```
 
-The result was correct, idiomatic, and passed tests. But *how* it got there predicts where this
-worker will break:
+It also verifies after every run that the prompt in the event stream matches what was sent, and
+labels any mismatch a harness failure rather than a capability result. **A truncated prompt is
+indistinguishable from a stupid model if you only look at the diff.** Any harness that measures a
+worker has to verify its own input first.
 
-- **`cat >>` only appends.** It works for adding a function to the end of a file and cannot
-  express an edit in the middle of one. Tasks needing insertion into existing code have to go
-  through `sed` or a rewrite instead.
-- **`sed -i` is unanchored.** It substitutes by pattern, so a pattern matching in more than one
-  place changes all of them silently. Pi's `edit` tool exists precisely to make edits verifiable;
-  the model is declining to use it.
-- **No verification that an edit landed where intended.** The model re-`cat`s the file afterwards,
-  which catches gross failures but not a substitution that also hit an unintended line.
+## What the model does with tools
 
-So the expected failure mode is not "refuses the task" but "edits the wrong place and the tests
-still pass". That is the quiet-failure case the evaluation is most concerned with, and it means
-**diffs must be read, not just test results trusted**. Do not score a run from its exit code.
+Tool choice tracks the difficulty of the change:
 
-Whether this is the model's preference or a weakness in emitting Pi's structured edit format is
-worth a deliberate test: run a task that requires modifying the middle of a large file and see
-whether it reaches for `edit` or contorts `sed`.
+- **Trivial appends go through the shell.** On a throwaway two-file repository the worker used
+  `cat >> file << 'EOF'` and `sed -i 's/old/new/'`, and touched no structured edit tool.
+- **Real edits use `edit`.** On the first genuine task — inserting a new entry into the middle of
+  an existing dictionary, plus two tests in an existing class — it used `edit` four times
+  alongside `read` and `bash`, and anchored the insertion correctly.
+
+The shell habit is still worth watching, because `cat >>` can only append and `sed` substitutes by
+pattern, so a pattern matching twice changes both occurrences silently. But the initial worry that
+the worker *never* reaches for structured edits was drawn from a single trivial run and did not
+survive contact with real work.
+
+The standing rule is unchanged and does not depend on which tools it picked: **read the diff, do
+not trust the exit code**. A run that changes nothing still passes a suite that was already green.
 
 ## Reasoning behaviour
 

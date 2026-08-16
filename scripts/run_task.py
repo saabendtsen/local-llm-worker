@@ -105,20 +105,58 @@ def existing_untracked(repo: Path) -> set[str]:
     }
 
 
-def find_pi() -> str:
+def find_pi() -> list[str]:
+    """Return the command prefix that launches Pi.
+
+    On Windows, `shutil.which('pi')` resolves to `pi.CMD`, and launching a .CMD
+    hands the argument list to cmd.exe -- which truncates any argument at its
+    first newline. The task prompt is multi-line, so the worker would silently
+    receive only its title. That is not a hypothetical: it produced a run that
+    looked like a comprehension failure until the event log showed the prompt
+    had arrived as a single line.
+
+    So resolve the package's JS entry point and run it under node directly,
+    bypassing the shim and cmd.exe entirely. Fall back to the shim only when the
+    entry point cannot be found, and warn if that happens.
+    """
+    node = shutil.which("node")
+    if node:
+        for root in _npm_global_roots():
+            entry = root / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
+            if entry.is_file():
+                return [node, str(entry)]
+
     pi = shutil.which("pi")
     if not pi:
         raise TaskError(
             "'pi' not found on PATH. Install it with:\n"
             "  npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
         )
-    return pi
+    if os.name == "nt" and pi.lower().endswith((".cmd", ".bat")):
+        print(
+            f"WARNING: falling back to {pi}. On Windows the shim truncates the prompt at its "
+            "first newline, so the worker will not see the whole task.",
+            file=sys.stderr,
+        )
+    return [pi]
+
+
+def _npm_global_roots() -> list[Path]:
+    roots = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        roots.append(Path(appdata) / "npm" / "node_modules")
+    prefix = shutil.which("npm")
+    if prefix:
+        roots.append(Path(prefix).parent / "node_modules")
+    roots.append(Path.home() / "node_modules")
+    return roots
 
 
 def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: int) -> dict:
     """Run Pi headless against the repository, streaming its JSON events to disk."""
     cmd = [
-        find_pi(),
+        *find_pi(),
         "-a",                            # trust project files; the branch is the safety net
         "--no-session",                  # each run is independent
         "--exclude-tools", "ask_question",  # headless: a question would hang forever
@@ -193,6 +231,53 @@ def summarise_events(events_path: Path) -> dict:
     }
 
 
+def prompt_delivery(events_path: Path, prompt: str) -> dict:
+    """Confirm the worker actually received the whole prompt.
+
+    A truncated prompt is indistinguishable from a stupid model when you only
+    look at the diff: the worker does something irrelevant, confidently, and the
+    run reads as a comprehension failure. This check makes that failure loud, so
+    a harness bug can never again be recorded as a capability result.
+    """
+    received = None
+    with events_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = event.get("message")
+            if isinstance(message, dict) and message.get("role") == "user":
+                parts = message.get("content")
+                if isinstance(parts, list):
+                    received = "".join(
+                        part.get("text", "")
+                        for part in parts
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    )
+                elif isinstance(parts, str):
+                    received = parts
+                break
+
+    sent_chars = len(prompt)
+    if received is None:
+        return {"verified": False, "reason": "no user message found in event stream",
+                "sent_chars": sent_chars}
+
+    # Harnesses wrap the prompt in their own scaffolding, so require containment
+    # rather than equality, and treat a large shortfall as truncation.
+    intact = prompt.strip() in received
+    return {
+        "verified": intact,
+        "sent_chars": sent_chars,
+        "received_chars": len(received),
+        "reason": None if intact else "prompt was altered or truncated in transit",
+    }
+
+
 def _tool_name(event: dict) -> str:
     """Pi has moved tool names around between versions; try the known shapes."""
     for path in (("toolName",), ("name",), ("tool", "name"), ("execution", "toolName")):
@@ -231,8 +316,22 @@ def verify(repo: Path, command: str, timeout: int) -> dict:
     }
 
 
-def diff_stats(repo: Path, preexisting: set[str]) -> dict:
-    numstat = git(repo, "diff", "--numstat")
+def stage_worker_changes(repo: Path, preexisting: set[str]) -> list[str]:
+    """Stage everything the worker changed, and nothing it did not.
+
+    `git add -A` would sweep in local scratch files that were already lying
+    around, so tracked modifications and worker-created files are staged
+    separately.
+    """
+    git(repo, "add", "-u")
+    created = sorted(existing_untracked(repo) - preexisting)
+    for name in created:
+        git(repo, "add", "--", name)
+    return created
+
+
+def diff_stats(repo: Path, created: list[str]) -> dict:
+    numstat = git(repo, "diff", "--cached", "--numstat")
     files = added = removed = 0
     for line in numstat.strip().splitlines():
         parts = line.split("\t")
@@ -245,14 +344,11 @@ def diff_stats(repo: Path, preexisting: set[str]) -> dict:
         if parts[1].isdigit():
             removed += int(parts[1])
 
-    # Only untracked files that appeared during the run are the worker's doing.
-    untracked = sorted(existing_untracked(repo) - preexisting)
-
     return {
         "files_changed": files,
         "lines_added": added,
         "lines_removed": removed,
-        "untracked_files": untracked,
+        "files_created": created,
     }
 
 
@@ -319,12 +415,30 @@ def main() -> int:
     events = summarise_events(run_dir / "events.jsonl")
     print(f"  {events['turns']} turns, {events['tool_calls']} tool calls")
 
-    (run_dir / "diff.patch").write_text(git(repo, "diff"), encoding="utf-8")
-    stats = diff_stats(repo, preexisting)
+    delivery = prompt_delivery(run_dir / "events.jsonl", prompt)
+    if not delivery["verified"]:
+        print(f"  WARNING: prompt delivery unverified -- {delivery['reason']}")
+        print(f"           sent {delivery['sent_chars']} chars, "
+              f"worker saw {delivery.get('received_chars', '?')}")
+        print("           Score this as a HARNESS FAILURE, not a model result.")
+
+    created = stage_worker_changes(repo, preexisting)
+    (run_dir / "diff.patch").write_text(git(repo, "diff", "--cached"), encoding="utf-8")
+    stats = diff_stats(repo, created)
     print(f"  {stats['files_changed']} files changed, "
           f"+{stats['lines_added']}/-{stats['lines_removed']}")
-    if stats["untracked_files"]:
-        print(f"  plus {len(stats['untracked_files'])} untracked file(s)")
+    if created:
+        print(f"  {len(created)} new file(s): {', '.join(created)}")
+
+    # Commit on the work branch. Without this the changes stay in the working
+    # tree and follow the checkout back to the original branch -- so the branch
+    # would be an empty artifact and the original branch would silently inherit
+    # the worker's edits.
+    work_commit = None
+    if stats["files_changed"]:
+        git(repo, "-c", "user.name=local-worker", "-c", "user.email=worker@localhost",
+            "commit", "-q", "-m", f"worker: {task_id}")
+        work_commit = git(repo, "rev-parse", "HEAD").strip()
 
     print("verifying...")
     try:
@@ -344,8 +458,10 @@ def main() -> int:
         "repo": str(repo),
         "branch": branch,
         "base_commit": base_commit,
+        "work_commit": work_commit,
         "model": args.model,
         "worker": worker,
+        "prompt_delivery": delivery,
         "events": events,
         "diff": stats,
         "verify": checks,

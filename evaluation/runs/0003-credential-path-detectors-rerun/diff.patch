@@ -1,0 +1,79 @@
+diff --git a/scripts/inventory-git-credential-exposure.py b/scripts/inventory-git-credential-exposure.py
+index f69e498..9df5171 100644
+--- a/scripts/inventory-git-credential-exposure.py
++++ b/scripts/inventory-git-credential-exposure.py
+@@ -18,6 +18,7 @@ PATH_DETECTORS = {
+     "environment-file": re.compile(r"(?:^|/)\.env(?:\..+)?$", re.I),
+     "credential-name": re.compile(r"(?:^|/|[-_.])(secret|secrets|credential|credentials)(?:$|/|[-_.])", re.I),
+     "private-key-name": re.compile(r"(?:^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)$|\.(key|pem|p12|pfx|keystore|jks)$", re.I),
++    "config-file": re.compile(r"(?:^|/)(\.netrc|\.npmrc|\.pypirc)$|(?:(?:^|/)kubeconfig)(?:$|/)", re.I),
+ }
+ 
+ CONTENT_DETECTORS = {
+diff --git a/tests/test_inventory_git_credential_exposure.py b/tests/test_inventory_git_credential_exposure.py
+index e593252..a329230 100644
+--- a/tests/test_inventory_git_credential_exposure.py
++++ b/tests/test_inventory_git_credential_exposure.py
+@@ -73,6 +73,62 @@ class CredentialInventoryTests(unittest.TestCase):
+                 [item["path"] for item in report["candidate_paths"]],
+             )
+ 
++    def test_config_file_detector_flags_netrc_npmrc_pypirc_kubeconfig(self):
++        with tempfile.TemporaryDirectory() as directory:
++            repository = pathlib.Path(directory)
++            self.git(repository, "init", "-b", "main")
++            self.git(repository, "config", "user.name", "Test")
++            self.git(repository, "config", "user.email", "test@example.invalid")
++            (repository / ".netrc").write_text(
++                "machine example.com login user password secret\n",
++                encoding="utf-8",
++            )
++            (repository / "config").mkdir()
++            (repository / "config" / ".npmrc").write_text(
++                "//registry.npmjs.org/:_authToken=abc123\n",
++                encoding="utf-8",
++            )
++            (repository / ".pypirc").write_text(
++                "[pypi]\npassword=p@ss\n",
++                encoding="utf-8",
++            )
++            (repository / "kubeconfig").write_text(
++                "apiVersion: v1\nclusters:\n- cluster:\n    server: https://example.com\n",
++                encoding="utf-8",
++            )
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "add config files")
++
++            report = scanner.inventory(repository)
++
++            by_path = {item["path"]: item for item in report["candidate_paths"]}
++            self.assertIn("config-file", by_path[".netrc"]["detector_categories"])
++            self.assertIn("config-file", by_path["config/.npmrc"]["detector_categories"])
++            self.assertIn("config-file", by_path[".pypirc"]["detector_categories"])
++            self.assertIn("config-file", by_path["kubeconfig"]["detector_categories"])
++
++    def test_config_file_detector_does_not_false_positive_on_similar_filenames(self):
++        with tempfile.TemporaryDirectory() as directory:
++            repository = pathlib.Path(directory)
++            self.git(repository, "init", "-b", "main")
++            self.git(repository, "config", "user.name", "Test")
++            self.git(repository, "config", "user.email", "test@example.invalid")
++            (repository / "kubeconfig.yaml").write_text("data: true\n", encoding="utf-8")
++            (repository / ".netrc.backup").write_text("data: true\n", encoding="utf-8")
++            (repository / ".npmrc.local").write_text("data: true\n", encoding="utf-8")
++            (repository / "subdir").mkdir()
++            (repository / "subdir/.pypirc.bak").write_text("data: true\n", encoding="utf-8")
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "add similar filenames")
++
++            report = scanner.inventory(repository)
++
++            detected_paths = {item["path"] for item in report["candidate_paths"]}
++            self.assertNotIn("kubeconfig.yaml", detected_paths)
++            self.assertNotIn(".netrc.backup", detected_paths)
++            self.assertNotIn(".npmrc.local", detected_paths)
++            self.assertNotIn("subdir/.pypirc.bak", detected_paths)
++
+     def test_checked_in_credential_inventories_are_utf8_json_and_value_free(self):
+         inventories = SCRIPT.parents[1] / "inventories"
+         paths = sorted(inventories.glob("legacy-home-server-credential-exposure-*.json"))

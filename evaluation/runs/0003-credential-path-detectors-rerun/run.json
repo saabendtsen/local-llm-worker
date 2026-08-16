@@ -1,0 +1,47 @@
+﻿{
+    "task_id":  "0003-credential-path-detectors-rerun",
+    "category":  "feature-small",
+    "complexity":  "small",
+    "recorded_at":  "2026-08-16T15:16:41+00:00",
+    "repo":  "C:\\Dev\\homelab",
+    "branch":  "worker/0003-credential-path-detectors-rerun",
+    "base_commit":  "ae957ca08d160c1fb063a1f4ffd9bb4ab7ada340",
+    "model":  "local-worker/local-worker",
+    "worker":  {
+                   "elapsed_seconds":  350.9,
+                   "exit_code":  0,
+                   "timed_out":  false,
+                   "stderr_tail":  ""
+               },
+    "prompt_delivery":  {
+                            "verified":  true,
+                            "sent_chars":  2337,
+                            "received_chars":  2337,
+                            "reason":  null
+                        },
+    "events":  {
+                   "turns":  15,
+                   "tool_calls":  15,
+                   "tools_used":  {
+                                      "bash":  8,
+                                      "edit":  4,
+                                      "read":  3
+                                  },
+                   "malformed_event_lines":  0
+               },
+    "diff":  {
+                 "files_changed":  2,
+                 "lines_added":  57,
+                 "lines_removed":  0,
+                 "untracked_files":  [
+
+                                     ]
+             },
+    "verify":  {
+                   "command":  "python -m pytest -q",
+                   "exit_code":  0,
+                   "passed":  true,
+                   "output_tail":  ".................................................................... [ 43%]\n................................................................. [ 85%]\n.......................                                                  [100%]\n156 passed, 11 subtests passed in 27.58s"
+               },
+    "work_commit":  "08e8b93"
+}

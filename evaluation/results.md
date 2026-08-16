@@ -52,52 +52,84 @@ behavioural finding it produced is recorded under [Findings](#findings).
 
 | # | Task | Category | Turns | Verify | Outcome | Time | Diff quality |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0001 | credential path detectors | feature-small | 9 | passed | **takeover** | 254 s | no diff — wrong deliverable |
+| 0001 | credential path detectors | feature-small | 9 | passed | **harness failure** | 254 s | n/a — prompt truncated |
+| 0002 | same, imperative framing | feature-small | 1 | passed | **harness failure** | 16 s | n/a — prompt truncated |
+| 0003 | same task, prompt delivered | feature-small | 15 | passed | **clean** | 351 s | correct, tested, in-style |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.
 
-### 0001 — the failure mode, in full
+### 0001 and 0002 — the harness broke, not the model
 
-The task asked for a new entry in `PATH_DETECTORS` so the credential-inventory script would
-recognise `.netrc`, `.npmrc`, `.pypirc`, and `kubeconfig`, with tests.
+Both runs were initially misread as model failures. They were not. The runner passed the task as
+a command-line argument to `pi`, which on Windows resolves to `pi.CMD`; launching a `.CMD` hands
+the argument list to `cmd.exe`, **which truncates any argument at its first newline**.
 
-The worker instead **audited the repository for credential files** and returned a confident
-report titled *"Credential-Bearing Config Filename Detection Report"*, concluding *"No hardcoded
-secrets or credential files were found. The workspace is clean."* Across 9 turns and 16 tool
-calls over 254 seconds it never opened `scripts/inventory-git-credential-exposure.py` and never
-opened the test module. It changed nothing.
+So the worker never received the task. In 0001 it got only the title line — *"# Task: detect
+well-known credential-bearing config filenames"* — which explains its behaviour completely: it
+dutifully audited the repository for credential files and returned a confident report, because
+that is exactly what the one line it received asked for. In 0002 the file opened with an HTML
+comment, so the worker received the four characters `<!--` and sensibly asked what was meant.
 
-It did the *subject matter* of the tool rather than the *engineering task about* the tool.
+The original write-up of 0001 concluded the model had misread an ambiguous heading. That was
+wrong, and wrong in the most expensive direction: it blamed the model for the harness's defect
+and would have sent the whole evaluation chasing prompt phrasing.
 
-Three things make this the most instructive run so far:
+Two changes prevent a repeat:
 
-1. **`verify.passed` was `true`.** Nothing changed, and the suite was already green, so the
-   acceptance command reported success. A pipeline scoring on exit codes would have filed this as
-   a win. This is the exact quiet failure the evaluation was built to catch, and it appeared on
-   the very first scored task.
-2. **Tool use was not the problem.** All 16 calls were well-formed, and the exploration was
-   competent. The failure was comprehension of what the deliverable was.
-3. **The framing probably contributed.** The task's heading read *"detect well-known
-   credential-bearing config filenames"* — which is genuinely ambiguous between "make the tool
-   detect these" and "go detect these". A frontier model resolves that from context; this one
-   took the literal reading and never revisited it.
+- The runner now resolves Pi's JS entry point and runs it under `node` directly, bypassing the
+  shim and `cmd.exe`.
+- Every run verifies the prompt arrived intact by checking the event stream's first user message
+  against what was sent, and says explicitly *"score this as a HARNESS FAILURE, not a model
+  result"* when it did not.
 
-The open question is how much of this is model capability and how much is prompt framing. Rerun
-the same task with an unambiguous imperative opening — naming the file to edit in the first
-sentence — before concluding anything about the task horizon. If explicit framing fixes it, the
-finding is *"this worker needs the deliverable stated as an instruction, not described as an
-outcome"*, which is cheap to accommodate. If it does not, the horizon is lower than hoped.
+**The lesson generalises beyond this bug.** A truncated prompt is indistinguishable from a stupid
+model when you only look at the diff: the worker does something irrelevant, confidently, and the
+run reads as a comprehension failure. Any measurement of a worker has to verify its own input
+before attributing anything to capability.
+
+### 0003 — the same task, done properly
+
+With delivery fixed, the identical task from 0001 succeeded: 15 turns, 15 tool calls, 351
+seconds, two files changed, +57 lines, whole suite green at 156 passed (up from 154).
+
+The diff was reviewed rather than trusted:
+
+- **The detector is correctly anchored.**
+  `(?:^|/)(\.netrc|\.npmrc|\.pypirc)$|(?:(?:^|/)kubeconfig)(?:$|/)` handles both a bare filename
+  and one nested in a directory, matching the convention of the three existing entries.
+- **The tests are meaningful, not decorative.** Verified by mutation: deleting the new detector
+  line makes the positive test fail with `KeyError: '.netrc'`. The test genuinely exercises the
+  change rather than passing regardless.
+- **The invariant held.** No payload field was added; the tool still reports paths and categories
+  only.
+- **Constraints were respected.** Exactly the two permitted files changed, and the three existing
+  detector categories were untouched.
+- **Style matched.** The tests build real temporary Git repositories in the existing style rather
+  than mocking, as the task asked.
+
+One quality nit, not a defect: the category is named `config-file`, which is vague next to
+`environment-file` / `credential-name` / `private-key-name` — something like
+`credential-config-name` would carry more meaning. Worth a rename, not a rejection.
+
+The negative test asserts absence from `candidate_paths` entirely, which passes with or without
+the change, so it is weaker than the positive one. It still encodes the right intent.
+
+Work branch: `worker/0003-credential-path-detectors-rerun`.
 
 ## Findings
 
-**The worker edits with shell text manipulation, not structured edit tools.** In its first real
-task it used `cat >> file << 'EOF'` to append and `sed -i 's/old/new/'` to substitute, never
-touching Pi's `edit` or `write` tools. The result was correct, but the method sets the expected
-failure mode: `cat >>` cannot express an edit in the middle of a file, and `sed` substitutes by
-pattern, so a pattern matching twice changes both occurrences silently. The prediction to test is
-that this worker fails *quietly* — wrong line changed, tests still green — rather than loudly.
-Diffs must be read. See [../docs/harness-pi.md](../docs/harness-pi.md).
+**Tool choice scales with the task.** On a trivial scratch repository the worker did everything
+through the shell — `cat >> file << 'EOF'` to append, `sed -i` to substitute — and touched no
+structured edit tool. That looked like a weakness worth worrying about. On the real task it used
+`edit` four times alongside `read` and `bash`, and produced a properly anchored insertion into
+the middle of an existing dictionary. The earlier reading was drawn from one throwaway run and
+overstated: the worker reaches for shell text manipulation when the change is a trivial append,
+and for real edit tools when it is not.
+
+**A bounded task of this shape is within reach, at roughly six minutes.** 0003 is one data point,
+not a task horizon, but it is the right shape: a known file, a stated invariant, an explicit
+false-positive case to avoid, and an acceptance command. The worker respected all four.
 
 **Generation speed is not the bottleneck; reasoning volume is.** At ~25 tok/s the raw rate is far
 better than expected for a 35B model on an 8 GB card. But the model spent 150 reasoning tokens to
