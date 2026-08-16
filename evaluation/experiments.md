@@ -48,9 +48,40 @@ speed.
 3. The interesting outcome is if 0004 produces a plausible-but-wrong fix. That would be the
    quiet-failure mode, and would make scaffolding a correctness requirement rather than a nicety.
 
-**Result.** _Pending._
+**Result.** _Partial._
 
-**Learning.** _Pending._
+| Run | Framing | Wall clock | Turns | Tools | Diff | Verify | Review verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0004 | Minimal | 617.6 s | 26 | 29 | 2 files, +20/−1 | passed | **CLEAN** |
+| 0005 | Precise | — | — | — | — | — | **void — contaminated, see below** |
+| 0006 | Scaffolded | pending | | | | | |
+
+**0004, the minimal framing, came back clean.** Given only the symptom — no file named, no
+approach, no edge cases, no conventions — it found the right line, applied the right fix (`-z`
+plus `surrogateescape`, matching how the module already reads trees fifteen lines above), and
+avoided the `exists()` trap. The reviewer confirmed that by execution rather than reading: a path
+`git rm`-ed and then recreated on disk still correctly reports `history-only`, where a filesystem
+check would have said `current`.
+
+Its test survived mutation testing — reverting the script makes it fail with exactly
+`'history-only' != 'current'`, so it pins the real defect. Scope was clean, no scratch files
+survived, suite green at 155.
+
+Prediction 2 held: `verify` passed and told us almost nothing. Prediction 3 did not happen — the
+minimal framing produced no quiet failure. Prediction 1 is so far consistent: 26 turns and 617 s
+is a lot of work for a 3-line fix, and much of it was rediscovering what the scaffolded variant is
+simply told.
+
+**Methodology error, recorded so it is not repeated.** The 0004 review was launched while run 0005
+was still executing *in the same working tree*. The reviewer checked out branches, reverted files,
+and ran tests concurrently with the worker editing that tree, then restored it — destroying the
+worker's in-progress uncommitted changes. Run 0005 is therefore void, not a result.
+
+Two agents sharing one filesystem is not parallelism, and being careful is not a fix. Reviews must
+run in an isolated `git worktree`, or strictly after the executions they review. Until that
+isolation exists, serialise.
+
+**Learning.** _Pending the reruns._
 
 ---
 

@@ -30,6 +30,20 @@ the exception — they are the evaluation's evidence and belong in Git.
 - `CTX` in `scripts\start-worker.cmd` and the harness's configured context window must stay in
   sync. Changing one without the other produces silent truncation that looks like model failure.
 
+## Never review and execute in the same working tree
+
+A review agent inspects a branch: it checks out, reverts files to mutation-test, runs the suite,
+and restores. A worker run edits that same tree. Doing both at once destroys the run — the
+reviewer's restore wipes the worker's uncommitted changes mid-flight, and the run's result becomes
+meaningless without anything obviously looking wrong.
+
+This has already happened once and voided a run. Being careful is not the fix. Either:
+
+- spawn review agents with worktree isolation so they get their own checkout, or
+- run reviews strictly after all executions have finished.
+
+The same applies to anything else that mutates the repository while a run is live.
+
 ## Recording results
 
 Every delegated task gets a row in `evaluation/results.md`, including the failures. A prototype
