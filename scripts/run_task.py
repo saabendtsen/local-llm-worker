@@ -105,6 +105,32 @@ def existing_untracked(repo: Path) -> set[str]:
     }
 
 
+def find_little_coder() -> tuple[list[str], dict[str, str]]:
+    """Return the command prefix and environment for the sandboxed little-coder.
+
+    Deliberately only the sandbox copy under sandbox/little-coder. little-coder
+    depends on Pi ^0.83.0 while the working setup runs 0.84.2, so a global
+    install would change which Pi every run uses -- and tool names, which the
+    metrics count, moved between those versions.
+    """
+    sandbox = REPO_ROOT / "sandbox" / "little-coder"
+    launcher = sandbox / "node_modules" / "little-coder" / "bin" / "little-coder.mjs"
+    if not launcher.is_file():
+        raise TaskError(
+            f"little-coder is not installed at {launcher}.\n"
+            f"Run: cd {sandbox} && npm install"
+        )
+    node = shutil.which("node")
+    if not node:
+        raise TaskError("'node' not found on PATH; little-coder needs it.")
+
+    models = sandbox / "models.json"
+    if not models.is_file():
+        raise TaskError(f"missing {models}")
+
+    return [node, str(launcher)], {"LITTLE_CODER_MODELS_FILE": str(models)}
+
+
 def find_pi() -> list[str]:
     """Return the command prefix that launches Pi.
 
@@ -161,10 +187,22 @@ NO_SHELL_TOOLS = "read,edit,write,grep,find,ls"
 
 
 def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: int,
-               allow_shell: bool = True) -> dict:
-    """Run Pi headless against the repository, streaming its JSON events to disk."""
+               allow_shell: bool = True, harness: str = "pi") -> dict:
+    """Run the chosen harness headless, streaming its JSON events to disk.
+
+    Both harnesses take the same flags because little-coder *is* Pi underneath —
+    it passes user arguments through to the Pi it bundles. That is what makes a
+    like-for-like comparison possible at all.
+    """
+    env = dict(os.environ)
+    if harness == "little-coder":
+        prefix, extra_env = find_little_coder()
+        env.update(extra_env)
+    else:
+        prefix = find_pi()
+
     cmd = [
-        *find_pi(),
+        *prefix,
         "-a",                            # trust project files; the branch is the safety net
         "--no-session",                  # each run is independent
         "--exclude-tools", "ask_question",  # headless: a question would hang forever
@@ -187,6 +225,7 @@ def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: 
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
         try:
             _, stderr = process.communicate(timeout=timeout)
@@ -376,6 +415,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", type=Path, help="path to the task markdown file")
     parser.add_argument("--model", default="local-worker/local-worker")
+    parser.add_argument(
+        "--harness",
+        choices=("pi", "little-coder"),
+        default="pi",
+        help="which harness drives the model. 'little-coder' uses the sandboxed copy, which "
+             "bundles Pi 0.83 and injects its own system prompt -- so its numbers are not "
+             "directly comparable to 'pi' unless the same task is run through both.",
+    )
+    parser.add_argument(
+        "--id",
+        help="override the task's id. Lets one task file drive several runs -- an A/B across "
+             "harnesses, or a repeat to measure variance -- without duplicating the prompt, so "
+             "both arms are provably identical.",
+    )
+    parser.add_argument("--branch", help="override the work branch name")
     parser.add_argument("--timeout", type=int, default=3600, help="worker timeout in seconds")
     parser.add_argument("--verify-timeout", type=int, default=900)
     parser.add_argument(
@@ -403,7 +457,7 @@ def main() -> int:
         print(f"ERROR: {repo} is not a Git repository", file=sys.stderr)
         return 2
 
-    task_id = meta["id"]
+    task_id = args.id or meta["id"]
     run_dir = RUNS_DIR / task_id
     if run_dir.exists():
         print(
@@ -421,7 +475,7 @@ def main() -> int:
 
     preexisting = existing_untracked(repo)
 
-    branch = meta.get("branch", f"worker/{task_id}")
+    branch = args.branch or meta.get("branch", f"worker/{task_id}")
     base_commit = git(repo, "rev-parse", "HEAD").strip()
 
     # Record the starting branch by NAME. Restoring with `git checkout -` looks
@@ -458,9 +512,16 @@ def main() -> int:
     allow_shell = not (args.no_shell or meta.get("shell", "").lower() in {"no", "false", "off"})
     print(f"shell  : {'enabled' if allow_shell else 'DENIED (read/edit/write only)'}")
     print()
+    print(f"harness: {args.harness}")
+    print()
     print("running worker...")
     worker = run_worker(repo, prompt, args.model, run_dir / "events.jsonl", args.timeout,
-                        allow_shell=allow_shell)
+                        allow_shell=allow_shell, harness=args.harness)
+
+    # Keep the exact prompt beside the evidence. The task file may be edited
+    # later; this is what was actually sent, so a run stays reproducible and
+    # reviewable without trusting that the task file never moved.
+    (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     print(f"  finished in {worker['elapsed_seconds']}s (exit {worker['exit_code']})")
     if worker["timed_out"]:
         print(f"  TIMED OUT after {args.timeout}s")
@@ -528,6 +589,8 @@ def main() -> int:
         "base_commit": base_commit,
         "work_commit": work_commit,
         "model": args.model,
+        "harness": args.harness,
+        "task_file": str(args.task),
         "shell_allowed": allow_shell,
         "worker": worker,
         "prompt_delivery": delivery,
