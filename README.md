@@ -53,9 +53,12 @@ This prototype targets the development PC as-is:
 
 The model is an MoE with ~3B active parameters, which is what makes a 35B model viable here:
 attention and shared weights sit on the GPU, expert weights stream from system RAM, and only a
-small fraction of the parameters are touched per token. Expect single-digit-to-low-teens
-tokens/sec, not interactive-chat speed. That is acceptable for a background worker and is itself
-one of the things the evaluation measures.
+small fraction of the parameters are touched per token.
+
+Measured on this machine: **~690 tok/s prompt processing, ~25 tok/s generation**, with the full
+120k context loaded. See [evaluation/results.md](evaluation/results.md) for the configurations
+behind those numbers. The practical latency cost is less about the generation rate than about how
+much the model chooses to think before answering — it is a reasoning model, and verbose.
 
 ## Status
 

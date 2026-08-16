@@ -7,7 +7,7 @@ rem Record the result in ..\evaluation\results.md.
 
 if not defined LLAMA_BENCH set "LLAMA_BENCH=C:\Tools\llama.cpp-cuda\llama-bench.exe"
 if not defined MODEL       set "MODEL=C:\models\Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"
-if not defined NCMOE       set "NCMOE=35"
+if not defined NCMOE       set "NCMOE=38"
 if not defined THREADS     set "THREADS=6"
 
 if not exist "%LLAMA_BENCH%" (

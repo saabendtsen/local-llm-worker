@@ -12,11 +12,13 @@ if not defined ALIAS      set "ALIAS=local-worker"
 if not defined HOST       set "HOST=127.0.0.1"
 if not defined PORT       set "PORT=8000"
 if not defined CTX        set "CTX=120000"
-if not defined NCMOE      set "NCMOE=35"
+if not defined NCMOE      set "NCMOE=38"
 if not defined THREADS    set "THREADS=6"
 if not defined BATCH      set "BATCH=4096"
 if not defined UBATCH     set "UBATCH=2048"
 if not defined LOADMODE   set "LOADMODE=mmap+mlock"
+if not defined CORS       set "CORS=localhost"
+if not defined EFFORT     set "EFFORT=default"
 
 if not exist "%LLAMA_BIN%" (
     echo ERROR: llama-server not found at "%LLAMA_BIN%".
@@ -53,6 +55,8 @@ echo.
     -ctk q8_0 ^
     -ctv q8_0 ^
     --load-mode %LOADMODE% ^
+    --cors-origins %CORS% ^
+    --reasoning-effort %EFFORT% ^
     -np 1 ^
     --jinja
 

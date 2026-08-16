@@ -28,6 +28,25 @@ Start the runtime first (`scripts\start-worker.cmd`), then in VS Code:
 - **Plan/Act**: use Act mode. Planning is Codex's job in this architecture — if the local model
   is doing the planning, the delegation has not saved anything.
 
+## This is a reasoning model
+
+Qwen 3.6 thinks before answering, and llama-server returns that trace separately as
+`message.reasoning_content` rather than in `message.content`. Two consequences:
+
+- **Budget for it.** Asked to reply with the two words `worker ready`, the model spent 166
+  tokens: 150 of reasoning, 2 of answer. At ~25 tokens/sec that is six seconds of latency before
+  any visible output. An agent step that reads a file and makes one edit pays this tax every
+  time, so wall-clock per task is driven as much by reasoning volume as by the work itself.
+- **A low `max_tokens` silently returns nothing.** The first smoke test came back with empty
+  `content` and a full token count — reasoning consumed the entire 32-token budget before the
+  answer began. If the harness reports blank replies, suspect the token limit before suspecting
+  the model.
+
+If reasoning latency proves to dominate, `EFFORT` in `scripts\start-worker.cmd` maps to
+llama-server's `--reasoning-effort` (`minimal`, `low`, `medium`, `high`). Treat lowering it as an
+experiment to record, not a default — thinking is likely part of why the model can implement at
+all, and trading it away to make a bad diff arrive faster is not a win.
+
 ## Known rough edges to expect
 
 These are the failure modes worth distinguishing from genuine capability limits, because they
