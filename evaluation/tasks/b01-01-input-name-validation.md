@@ -1,9 +1,10 @@
----
+﻿---
 id: b01-01-input-name-validation
 repo: C:\Dev\homelab
 category: bugfix
 complexity: small
 verify: python -m pytest -q tests/test_codex_task_bridge.py
+base: experiment/74-local-llm-worker
 ---
 
 # Task: reject unsafe input names in Bridge.submit
@@ -45,7 +46,7 @@ emitting the `{"error": ...}` envelope.
 
 ## Notes
 
-- `os.path.basename(name) != name` looks like an equivalent fix and is not — `basename("..")` is
+- `os.path.basename(name) != name` looks like an equivalent fix and is not â€” `basename("..")` is
   `".."`, so `".."` would still be accepted. A fix that only special-cases `""` has the same hole.
 - Rejecting everything beginning with `.` would be wrong; see the dot-prefixed criterion above.
 - Test conventions: plain `unittest.TestCase`, no pytest features. `setUp` builds a

@@ -204,6 +204,71 @@ strictly safer and only slightly more expensive.
 
 ---
 
+## E4 — Test-first loop with deterministic gates
+
+**Status:** designed, not yet built
+
+**The idea.** Invert the order: the worker writes the *test* first, the pipeline proves the test
+actually fails, and only then does the worker write the implementation. Every check between steps
+is deterministic and owned by the harness, not by the model.
+
+**Why, in one sentence.** E1 showed that a worker which already has working code writes tests that
+pass rather than tests that discriminate — so make the test exist before the code does, and prove
+it fails.
+
+**The evidence this comes from.** In run 0008 the task *explicitly* warned about the
+`(repository / path).exists()` trap and explained why it is wrong. The worker avoided it in the
+implementation, then wrote a test that does not catch it: substituting the wrong fix leaves its
+own tests passing (6 passed). Its removed-path test unlinks the file from disk as well as from the
+index, so it cannot distinguish tree membership from filesystem existence. The warning shaped what
+the worker *did*, not what it *defended against*. Writing the test after the code is what allows a
+test to be written to pass.
+
+**The loop.**
+
+| Step | Actor | Gate |
+| --- | --- | --- |
+| 1 | Worker writes the test only | Pipeline runs it — **must FAIL**. A passing test here proves nothing; reject and retry. |
+| 2 | Worker writes the implementation | Pipeline runs the new test — **must PASS**. |
+| 3 | — | Pipeline runs the full suite — **must PASS**, catching regressions. |
+
+Step 1's must-fail gate *is* the mutation test, moved from a manual review pass into the harness
+and applied before any code exists. It is the single cheapest quality gate available here: it
+costs one test run and catches decorative tests at the moment they are written, rather than hours
+later in review.
+
+**Why the worker should have no shell for this.** If the pipeline runs the tests, the worker does
+not need `bash` (`--no-shell`, see `scripts/run_task.py`). Three benefits at once:
+
+- **Safety.** No shell means no command can reach anything, inside the repository or outside it.
+- **Focus.** The worker stops spending turns deciding whether it is finished, working out how to
+  invoke pytest, and interpreting output. In run 0004 that consumed a large share of 26 turns, and
+  none of it is judgement.
+- **Determinism.** The pipeline reports pass/fail identically every time; the model's reading of
+  test output does not.
+
+**What is measured.**
+1. How often step 1 produces a test that wrongly passes — i.e. how often the must-fail gate fires.
+   This is the direct measure of whether test-first fixes the E1 finding.
+2. Whether implementations improve when a discriminating test already exists.
+3. Turn count against the shell-enabled baseline, which should drop sharply if the theory about
+   wasted turns is right.
+4. Whether removing the shell hurts anything not anticipated.
+
+**Predictions, recorded in advance.**
+1. The must-fail gate will fire regularly. On the E1 evidence, tests written without a failing-first
+   requirement are often non-discriminating.
+2. Turn counts will fall substantially without a shell, because a large fraction of observed tool
+   calls are test-running and self-checking rather than editing.
+3. The risk is the worker writing a test that fails for the *wrong reason* — a syntax error or a
+   bad import also fails. The gate must distinguish "fails because the behaviour is absent" from
+   "fails because the test is broken", probably by requiring a specific assertion failure rather
+   than any non-zero exit.
+
+**Result.** _Not yet run._
+
+---
+
 ## Settled questions
 
 - **Is the MoE genuinely sparse at runtime?** Yes, proven by a memory-bandwidth argument — a dense
