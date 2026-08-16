@@ -25,6 +25,27 @@ Not on whether the local model matches a frontier model. It will not, and that i
 3. **Claude scores it.** Read the diff — not just the exit code — and add a row to
    [results.md](results.md).
 
+## Batches — one plan, N executions, one review
+
+For work that decomposes into several atomic steps, `scripts/run_batch.py` runs them in sequence
+on a single branch:
+
+```cmd
+scripts\run-batch.cmd --id refactor-01 evaluation\tasks\a.md evaluation\tasks\b.md
+```
+
+Claude plans all the steps up front and reviews once at the end; the worker executes each with a
+fresh context. That is where the frontier-token saving comes from — one planning pass and one
+review pass amortised over N executions.
+
+**The batch halts on the first step that fails**, and treats "produced no changes" as a failure
+too. Reviewing only at the end is fine; *continuing past a broken step* is not, because every
+later step then builds on a broken base and the final review becomes an untangling exercise. The
+gate is the worker's own acceptance command, so it costs nothing in frontier tokens.
+
+Order steps to be as independent as you can, so a halt discards as little work as possible.
+`--keep-going` overrides the breaker, but then expect to review a tangle.
+
 ## Read the diff, not the exit code
 
 The worker edits files with `cat >>` and `sed -i` rather than structured edit tools
