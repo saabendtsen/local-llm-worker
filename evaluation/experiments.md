@@ -501,11 +501,29 @@ mistake this project has made repeatedly.
 | Arm | Wall clock | Turns | Tools | Diff | Suite | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
 | A — Pi | 1396.5 s (23 min) | 64 | 75 | 2 files created, +773 | **181 passed, 57 subtests** | pending review |
-| B — little-coder | pending | | | | | |
+| B — little-coder | 1028.0 s (17 min) | 38 | 48 | 3 files created, +651 | **175 passed, 27 subtests** | pending review |
 | C — Pi repeat | pending | | | | | |
 
-Arm A built both files and added 27 tests over the 154 baseline. Tool mix was shell-heavy: bash 45,
-edit 15, read 13, write 2. No errored turns, prompt delivery verified.
+Both arms built the feature and both suites are green. No errored turns, prompt delivery verified
+on both. Three differences stand out before any review:
+
+**little-coder was faster with fewer turns** — 17 minutes against 23, and 38 turns against 64,
+despite paying ~5.3k extra prefill tokens per request (7,471 characters of prompt sent, against a
+task file that is far shorter). If that holds up, its extension layer is buying real efficiency
+rather than just overhead.
+
+**The tool mixes are completely different.** Pi went shell-heavy: `bash` 45, `edit` 15, `read` 13,
+`write` 2. little-coder went read-heavy and used its own extension tools: `read` 17, `bash` 11,
+`edit` 5, `glob` 4, `write` 4, plus `ShellSession` 3, `ShellStart` 2, `ShellLog` 1, `dispatch` 1.
+So the metrics parser does capture little-coder's tools, but under a different vocabulary — worth
+knowing before comparing tool counts across harnesses as though they meant the same thing.
+
+**little-coder left a scratch file behind.** `_analyze.mjs` in the repository root, alongside the
+two intended files. Pi created exactly the two files asked for. That is a real quality difference,
+and it is exactly the untracked-side-effect problem E3 flagged — except here it survived into the
+commit rather than being cleaned up.
+
+Pi also wrote more tests: 27 new subtests against little-coder's 21.
 
 **Reviews pending.** Each arm gets a blind review in an isolated worktree, checking the three
 attractors empirically and mutation-testing the tests — then a head-to-head comparison.
