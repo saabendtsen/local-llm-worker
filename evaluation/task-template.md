@@ -46,6 +46,25 @@ Frontmatter fields:
 - `<the verify command>` passes
 - Return a concise summary of what was modified and anything left unresolved.
 
+<!--
+Two things learned from E6, where three independent implementations shared the
+same two blind spots. Add them to the criteria whenever they apply.
+
+1. NAME THE SOURCE OF TRUTH each assertion must be pinned to. "Cover the
+   per-kind breakdown" produced self-consistency checks in all three arms --
+   assertions that any internally coherent wrong answer satisfies. "Assert the
+   per-kind counts equal registry["summary"]["by_kind"]" would have produced a
+   real check. Tests written after working code verify that the code agrees
+   with itself unless an external truth is named.
+
+2. ASK FOR THE ENTRY POINT TO BE TESTED. All three arms put the logic in a
+   clean pure function as asked, and none tested main(). All three then shipped
+   error-path defects -- tracebacks on malformed input, in violation of a stated
+   constraint. If the command line is a deliverable, say that its argument
+   parsing, exit codes, and error messages must be covered.
+-->
+
+
 ## Notes
 
 <Anything already known that would otherwise cost the worker a long detour:

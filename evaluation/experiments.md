@@ -569,7 +569,76 @@ That is the E1/E2 finding again in a third costume: **tests written after workin
 the code is consistent with itself, not that it is correct.** Reported counts of 636 configuration
 and 708 skill units — against truths of 185 and 914 — triggered nothing.
 
-**Reviews of Arms A and C pending.**
+### All three verdicts: MINOR REPAIR
+
+| Arm | Harness | Attractors avoided | Scope | Test depth | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| A | Pi | 3 / 3 | clean, exactly 2 files | strongest — "genuinely load-bearing" | MINOR REPAIR |
+| B | little-coder | 3 / 3 | **committed `_analyze.mjs`** | weakest | MINOR REPAIR |
+| C | Pi repeat | 3 / 3 | clean, exactly 2 files | thin — each attractor held by one assertion | MINOR REPAIR |
+
+**Every arm reproduced all eleven ground-truth figures exactly** and avoided all three attractors.
+Three independent implementations of a genuine feature, all correct at the core. That is the
+strongest result the worker has produced.
+
+### The convergence is more informative than the differences
+
+Three implementations, built independently, share the *same two weaknesses*:
+
+**1. None of them tested the command line.** All three put the logic in a clean pure function, as
+asked — and all three left `main()` entirely untested. All three consequently shipped error-path
+defects: unreadable or wrong-shaped input produces a **traceback**, in direct violation of a stated
+constraint, in every arm. Arm C's reviewer put it plainly: the CLI is untested, *"which is precisely
+why these shipped"*.
+
+**2. None of them pinned per-kind counts to ground truth.** The subtle kind-misattribution mutation
+— relabelling one kind as another while keeping all eight names present — was run against all three
+suites:
+
+- Arm B: **passed clean**, with reported counts of 636 and 708 against truths of 185 and 914.
+- Arm C: caught by exactly **one** assertion, and only indirectly via a sum identity.
+- Arm A: caught **only incidentally**, by a synthetic fixture that happened to use the swapped kind.
+  Every real-data per-kind assertion passed with two kinds' counts swapped.
+
+`registry["summary"]["by_kind"]` was available and one line away in all three. None used it.
+
+**Both weaknesses are the same underlying thing:** tests written after working code check that the
+code agrees with itself. Arm A's tautological `test_per_kind_decided_plus_undecided` is the purest
+example — `undecided_count` is *defined* as `registry_count - decided_count`, so the assertion can
+never fail. Arm C wrote three parameterised loops with no `subTest`, and built temp-directory
+fixtures it never read back.
+
+This is now the finding of E1, E2, and E6 alike, from three different angles. It is the strongest
+argument available for **E4's test-first gate**, and it sharpens what that gate must demand: not
+merely that a test fails before the implementation, but that the task **names the external source
+of truth a test must be pinned to**. "Cover the per-kind breakdown" produced self-consistency
+checks in all three arms; "assert the per-kind counts equal `registry["summary"]["by_kind"]`"
+would have produced the real check.
+
+### On the harness question
+
+**Undecided, and honestly so.** Both harnesses produced a correct core, both landed on MINOR
+REPAIR, and Pi's own two runs bracket little-coder on every timing and effort measure.
+
+The only difference outside the noise band is **scope hygiene**: little-coder committed a scratch
+file to the repository root; both Pi runs created exactly what was asked. One run each, so treat it
+as a flag rather than a conclusion.
+
+The extension layer neither helped nor hurt measurably on this task. Its 5.3k-token prefill bought
+nothing observable here — but it also cost nothing that mattered, since wall clock is not a
+constraint for this use.
+
+**Learning.**
+
+1. **The worker can build a real feature.** Three independent 200-350 line implementations with
+   tests, all correct on the core join, all avoiding three deliberate traps. This is well past
+   bugfix territory.
+2. **Tell it to test the entry point.** All three tested the pure function and none tested `main()`,
+   and all three shipped error-path defects as a direct result. Add it to the task template.
+3. **Name the source of truth for each assertion.** Not "cover the per-kind breakdown" but "assert
+   it equals `registry["summary"]["by_kind"]`". Without that, expect self-consistency checks.
+4. **Variance is the dominant effect and must be designed around.** A 2.2× spread on identical
+   inputs means single-run comparisons are worthless. Every future A/B needs a repeat arm.
 
 ---
 
