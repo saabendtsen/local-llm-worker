@@ -1,0 +1,61 @@
+{
+  "task_id": "f01-lc",
+  "category": "feature-medium",
+  "complexity": "medium",
+  "recorded_at": "2026-08-16T22:00:58+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/f01-lc",
+  "base_commit": "e6440065987518487c37a4c9eccdf687d909c89b",
+  "work_commit": "960e7dfc4333dbf938e4694667b75628d63f03e2",
+  "model": "local-worker/local-worker",
+  "harness": "little-coder",
+  "task_file": "evaluation\\tasks\\f01-migration-coverage-report.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 1028.0,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 7471,
+    "received_chars": 7471,
+    "reason": null
+  },
+  "events": {
+    "turns": 38,
+    "tool_calls": 48,
+    "tools_used": {
+      "read": 17,
+      "bash": 11,
+      "edit": 5,
+      "glob": 4,
+      "write": 4,
+      "ShellSession": 3,
+      "ShellStart": 2,
+      "dispatch": 1,
+      "ShellLog": 1
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 3,
+    "lines_added": 651,
+    "lines_removed": 0,
+    "files_created": [
+      "_analyze.mjs",
+      "scripts/report-migration-coverage.py",
+      "tests/test_migration_coverage.py"
+    ]
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 38%]\n................................................. [ 66%]\n..........................................................               [100%]\n175 passed, 27 subtests passed in 25.84s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

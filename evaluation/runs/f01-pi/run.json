@@ -1,0 +1,55 @@
+{
+  "task_id": "f01-pi",
+  "category": "feature-medium",
+  "complexity": "medium",
+  "recorded_at": "2026-08-16T21:43:20+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/f01-pi",
+  "base_commit": "e6440065987518487c37a4c9eccdf687d909c89b",
+  "work_commit": "0e3a90ab1214c1e2b4bd99cd54df70634d4a874c",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f01-migration-coverage-report.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 1396.5,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 7471,
+    "received_chars": 7471,
+    "reason": null
+  },
+  "events": {
+    "turns": 64,
+    "tool_calls": 75,
+    "tools_used": {
+      "bash": 45,
+      "edit": 15,
+      "read": 13,
+      "write": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 773,
+    "lines_removed": 0,
+    "files_created": [
+      "scripts/report-migration-coverage.py",
+      "tests/test_migration_coverage.py"
+    ]
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 37%]\n........................................................................................... [ 87%]\n......................                                                   [100%]\n181 passed, 57 subtests passed in 25.98s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

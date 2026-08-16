@@ -21,3 +21,9 @@ desktop.ini
 # Sandbox dependency trees - configuration and notes are tracked, node_modules is not
 sandbox/**/node_modules/
 sandbox/**/package-lock.json
+
+# Raw agent event streams. Both harnesses re-emit the whole accumulated
+# message on every token, so one feature build produced a 189 MB log past
+# GitHub's file limit. scripts/distill_events.py writes events-distilled.jsonl
+# alongside, which keeps every event the evaluation reads at ~7% of the size.
+evaluation/runs/**/events.jsonl
