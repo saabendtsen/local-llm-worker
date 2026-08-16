@@ -251,7 +251,55 @@ not damning, but it is the failure mode to watch for.
 not, Claude derives progress from the diff and ignores the model's summary entirely — which is
 strictly safer and only slightly more expensive.
 
-**Result.** _Pending._
+**Result.** **Accurate about *what* changed. Unreliable about *why*, and systematically flattering
+about *how it got there*.** Five productive runs, every summary checked claim-by-claim against its
+diff.
+
+**Zero fabrication.** Every claimed file edit, function touched, and quoted code block was present
+in the diff. Quoted before/after snippets were literal, not paraphrased. Test-pass counts were true
+every time and corroborated by independent harness logs. The feared failure — a confident report
+about work never done — did not occur in any productive run.
+
+The unreliability sits one layer up, in the explanation rather than the inventory:
+
+| Failure mode | Example | Consequence |
+| --- | --- | --- |
+| **Mischaracterised root cause** | Claimed the old guard failed for `""`, `"."` *and* `".."` because `Path(x).name == x` for all three. In fact `Path(".").name == ""`, so `"."` was already rejected — the defect was roughly half the claimed size and the stated mechanism is wrong. | **Dangerous.** A planner reasoning from it reasons from a false premise. |
+| **Overstated property** | Described a regex as matching `kubeconfig` "as an exact filename", when `(?:(?:^|/)kubeconfig)(?:$|/)` also matches everything under a `kubeconfig/` directory. | Dangerous for the same reason. |
+| **Process omission / survivorship bias** | Three of five runs had a failing first attempt — a bad regex, a test targeting a filename no detector matched, an edit that left the module uncollectable. **None mentioned it.** Every summary narrates a clean first-pass success. | Recoverable, but it makes the worker look more capable than it is. |
+| **Untracked side effects** | One run created five `debug_*.py` files in the repository root and deleted them later. They appear in neither the diff nor the prose. | A worker that forgets to clean up leaves state that poisons the next fresh context. |
+
+**The degenerate case failed well.** Run 0009 — 23 minutes, zero changes — **claimed nothing at
+all**. No text block in 32,083 events, just a thinking block visibly looping. Silence, not
+confabulation. That is the good failure mode.
+
+But its `run.json` still recorded `verify.passed: true` with `154 passed`, because the untouched
+suite passes. **A loop keyed on "did verify pass?" would mark that task complete.**
+
+**"Unresolved: Nothing" was written in three of five summaries and was honest each time — but it is
+a constant, not a signal.** Do not read it as information.
+
+**Sample limits, stated plainly.** Five runs, one model, two source files, all small bugfixes whose
+success criterion was a passing test. Critically: **no run in this sample had to report its own
+failure.** The honesty of a bad-news report is entirely untested, and that is the case that matters
+most for an unsupervised loop.
+
+**Learning — hybrid, with the diff as the authority.**
+
+1. **The diff is the record of fact.** Machine-extract the diffstat, changed files, and added test
+   names. Deterministic and immune to all four failure modes.
+2. **Worker prose is kept but demoted to an unverified hint.** It has real value — one run's
+   root-cause analysis was correct, specific, and would have cost a frontier model genuine work to
+   rediscover. Never let a planner treat its causal claims as established.
+3. **Gate on `files_changed > 0` before trusting `verify.passed`.** Implemented; see below.
+4. **An invention tripwire is nearly free**: extract every file path and test name mentioned in the
+   summary and assert each appears in the diff. It would have caught a test-name discrepancy
+   automatically, and would catch outright fabrication.
+5. **Snapshot untracked files around the run**, since debug scratch escaped both diff and prose.
+
+So the economising premise — reliable self-reports mean less frontier involvement — **holds for
+what changed, and fails for why it changed or what the change guarantees.** Those stay with the
+frontier model.
 
 ---
 

@@ -508,6 +508,16 @@ def main() -> int:
     else:
         print("  skipped (no verify command)")
 
+    # A green suite on an empty diff means the worker did nothing, not that the
+    # task is done. Observed for real: a 23-minute run that made zero changes
+    # recorded verify.passed because the untouched suite still passes. Anything
+    # keyed on the acceptance command alone would file that as a success.
+    no_op = stats["files_changed"] == 0
+    if no_op and checks.get("passed"):
+        print("  WARNING: the acceptance command passed but NOTHING CHANGED.")
+        print("           A green suite on an empty diff means the worker did no work.")
+        print("           This is not a success.")
+
     record = {
         "task_id": task_id,
         "category": meta["category"],
@@ -524,6 +534,10 @@ def main() -> int:
         "events": events,
         "diff": stats,
         "verify": checks,
+        # Derived, so nothing downstream has to rediscover the distinction
+        # between "the acceptance command passed" and "work was actually done".
+        "produced_no_changes": no_op,
+        "meaningful_pass": bool(checks.get("passed")) and not no_op,
     }
     (run_dir / "run.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
