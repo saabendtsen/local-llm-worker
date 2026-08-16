@@ -1,0 +1,147 @@
+---
+id: f01-migration-coverage-report
+repo: C:\Dev\homelab
+category: feature-medium
+complexity: medium
+verify: python -m pytest -q
+base: experiment/74-local-llm-worker
+---
+
+<!--
+E6 — FEATURE BUILD, run through two harnesses for comparison.
+
+This task is deliberately precise about WHAT the feature must do and silent
+about HOW to structure it. Six design decisions are left genuinely open (ledger
+discovery, output shape, kind attribution, failure semantics, anomaly
+granularity, whether to cross-check ledger summaries). Divergence there is the
+point — it is what makes comparing two implementations informative rather than
+"both passed".
+
+Ground truth, verified before writing this task:
+  1613 units, 8 ledgers, 0 undecided, 0 duplicates, 0 unknown
+  migrate 61, consolidate 114, archive 209, retain in place 264, discard 965
+Baseline on this branch: 154 passed, 11 subtests passed.
+
+Three known attractors, from reconnaissance:
+  1. The registry carries "disposition": "pending" on all 1613 units. Reading
+     dispositions from the registry rather than the ledgers yields a
+     confidently 0%-covered report that still passes a shallow test.
+  2. IDs look like they encode kind (repository-*, service-*, skill-*) but
+     physical-* spans five kinds across 818 units. Prefix inference is wrong.
+  3. Collapsing decisions into a dict keyed by id silently discards the
+     duplicate evidence the tool exists to surface.
+The task states the required OUTPUTS for each, per E2's finding that
+enumerating cases beats warning about mistakes — but never names the attractor.
+-->
+
+# Task: report migration-disposition coverage across all ledgers
+
+**Create `scripts/report-migration-coverage.py`.** Then **create
+`tests/test_migration_coverage.py`** covering it.
+
+This is a new capability. No existing script reads more than one disposition ledger.
+
+## Why it is needed
+
+`inventories/` holds one migration-unit registry and eight disposition ledgers, each built by its
+own script and each verified only in isolation by its own test module. Nothing checks them
+together, so there is currently no way to answer "does every migration unit have exactly one
+reviewed disposition?" without opening nine files by hand.
+
+## What it must do
+
+Join the registry against every supplied ledger and report coverage.
+
+**A pure, importable function** must do the work, taking parsed data and returning the report as a
+data structure — no printing, no file writing, no `argparse.Namespace`. The test module will call
+it directly. The disposition builders in `scripts/build-*-dispositions.py` show the convention.
+
+**A command-line entry point** must wrap it: read the registry and the ledgers, produce the
+report, write it to a path when one is given, and otherwise print it. Unusable input must produce
+a clear one-line message on stderr and a non-zero exit, never a traceback.
+
+**The report must convey**, whatever names and shape you choose for the fields:
+
+- Totals: how many units the registry holds, how many are decided, how many are not, and whether
+  coverage is complete.
+- A per-kind breakdown across all eight kinds in the registry, each with its registry count,
+  decided count, and a count for each disposition.
+- Aggregate disposition totals across all kinds.
+- Provenance for each ledger: at minimum where it came from and how many decisions it carries.
+- Anomalies, each identifying the units concerned:
+  - units in the registry that no ledger decides;
+  - units decided by more than one ledger;
+  - decisions whose unit is not in the registry;
+  - decisions whose disposition is outside the permitted vocabulary.
+
+**The disposition vocabulary is fixed** by `CONTEXT.md` and must be used exactly as written:
+`migrate`, `consolidate`, `archive`, `retain in place`, `discard`. Note that one of them contains
+a space; it must not be renamed or normalised, or the report will disagree with every ledger.
+
+## Required results on the checked-in data
+
+Running against `inventories/migration-unit-registry-2026-08-08.json` and all eight
+`inventories/*-dispositions-*.json` files, the report must show:
+
+- 1613 registry units, 1613 decided, 0 undecided, coverage complete
+- no duplicates, no unknown units, no invalid dispositions
+- aggregate totals exactly: migrate 61, consolidate 114, archive 209, retain in place 264,
+  discard 965
+
+These numbers are verified. If your implementation disagrees with them, the implementation is
+wrong — do not adjust the expected values to match your output.
+
+## Cases the tests must cover
+
+Cover each of these explicitly. Synthetic fixtures in a temporary directory are the right home for
+the anomaly cases; the checked-in inventories cover the happy path.
+
+1. **The real data.** Against the checked-in registry and all eight ledgers: coverage complete,
+   1613 decided, and the exact aggregate totals above.
+2. **A unit decided in two ledgers.** Given a registry of one unit and two ledgers that both
+   decide it with different dispositions, the report must count it as **one** decided unit, not
+   two, must flag it as a duplicate, and that kind's disposition counts must sum to 1.
+3. **A decision for a unit not in the registry.** The report must flag it, must not count it
+   toward any kind, and must not raise.
+4. **No ledgers at all.** A valid input: every unit undecided, coverage incomplete.
+5. **A disposition outside the five permitted terms.** Flagged rather than silently counted.
+6. **`retain in place` survives a round trip** through the report with its space intact.
+
+## Constraints
+
+- Create only the two files named above. Do not modify any existing script, test, or inventory.
+- The tool reads and reports; it must never write to anything under `inventories/`.
+- Do not copy filesystem paths out of the registry's `locations` into the report. It emits
+  identifiers, kinds and counts — a coverage report is not a place for server paths.
+- `python -m pytest -q` must pass. Baseline on this branch is 154 passed, 11 subtests passed, so
+  any pre-existing failure is a regression introduced here.
+
+## Deliberately left to you
+
+Decide these yourself; there is more than one defensible answer, and no answer will be marked
+wrong for its own sake:
+
+- how ledgers are supplied — explicit repeated paths, directory discovery, or both;
+- the output format, and whether more than one is offered;
+- whether the report is keyed by kind as a mapping or listed as records;
+- whether incomplete coverage is an error exit or merely a reported fact;
+- how finely anomalies are structured;
+- whether each ledger's own summary block is recomputed and checked.
+
+## Conventions
+
+- `#!/usr/bin/env python3`, a one-line module docstring, `from __future__ import annotations`.
+- Module-level constants in `SCREAMING_CASE`; `def main() -> int:` with `argparse`, ending
+  `return 0`; module ends `if __name__ == "__main__": raise SystemExit(main())`.
+- All file I/O passes `encoding="utf-8"` explicitly. JSON output is
+  `json.dumps(..., indent=2) + "\n"`.
+- Tests are plain `unittest.TestCase` — no pytest fixtures, no `conftest.py`. `ROOT =
+  pathlib.Path(__file__).parents[1]`, module-level path constants, `setUpClass` to parse the
+  checked-in JSON once, `collections.Counter` for comparisons, `self.subTest(...)` for
+  parameterised loops, and the file ends with `if __name__ == "__main__": unittest.main()`.
+- A hyphenated script name is not importable, so the test module must load it with
+  `importlib.util.spec_from_file_location`. `tests/test_inventory_git_credential_exposure.py`
+  shows the pattern.
+
+Return a concise summary of what you built, the design choices you made and why, and anything left
+unresolved.
