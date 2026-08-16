@@ -27,16 +27,45 @@ Asked to count 600 generated lines inside a 13k-token prompt, the model answered
 on 4 of 4 attempts across configurations. That is a retrieval check, not a coding-ability check;
 it only establishes that long context is genuinely being attended to rather than truncated.
 
+## Harness validation
+
+Before any scored task, the end-to-end loop was proven on a throwaway two-file Python repository:
+add a function plus a covering test, then run pytest.
+
+| Metric | Result |
+| --- | --- |
+| Wall clock | 49.5 s, unattended |
+| Turns | 9 |
+| Tool calls | 10 (`bash` ×8, `read` ×2) |
+| Diff | 2 files, +7/−1 |
+| Verify | `python -m pytest -q` passed, confirmed by an independent rerun |
+
+The implementation was better than the minimum asked for: `shout()` was written as
+`greet(name).upper()`, reusing the existing function rather than duplicating its string. That is
+a real, if small, sign of judgement rather than pattern completion.
+
+This run is not scored below — the target was a scratch repository, so it measures the harness,
+not the worker's usefulness on real work. Its run directory was deleted for that reason; the
+behavioural finding it produced is recorded under [Findings](#findings).
+
 ## Delegated tasks
 
-| # | Task | Category | Iterations | Tests | Outcome | Time | Diff quality |
+| # | Task | Category | Turns | Verify | Outcome | Time | Diff quality |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | | | | | | | | |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
-See [README.md](README.md) for what each means.
+See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.
 
 ## Findings
+
+**The worker edits with shell text manipulation, not structured edit tools.** In its first real
+task it used `cat >> file << 'EOF'` to append and `sed -i 's/old/new/'` to substitute, never
+touching Pi's `edit` or `write` tools. The result was correct, but the method sets the expected
+failure mode: `cat >>` cannot express an edit in the middle of a file, and `sed` substitutes by
+pattern, so a pattern matching twice changes both occurrences silently. The prediction to test is
+that this worker fails *quietly* — wrong line changed, tests still green — rather than loudly.
+Diffs must be read. See [../docs/harness-pi.md](../docs/harness-pi.md).
 
 **Generation speed is not the bottleneck; reasoning volume is.** At ~25 tok/s the raw rate is far
 better than expected for a 35B model on an 8 GB card. But the model spent 150 reasoning tokens to

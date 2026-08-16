@@ -2,45 +2,64 @@
 
 The prototype is judged on one question:
 
-> What percentage of Codex execution work can reliably be delegated
+> What percentage of execution work can reliably be delegated
 > without creating more review and rework than it saves?
 
-Not on whether the local model matches Codex. It will not, and that is not the point.
+Not on whether the local model matches a frontier model. It will not, and that is not the point.
 
-## Method
+## The cycle
 
-Run 10–20 real tasks from this workspace's repositories through the local worker. For each one:
+1. **Claude writes the task.** Copy [task-template.md](task-template.md) into `tasks/` and fill
+   it in. The task is **bounded, not prescribed**: constraints and acceptance criteria, never a
+   list of edits. If the plan already contains every change, the reasoning cost has been paid and
+   the run measured nothing.
+2. **The runner executes it.**
 
-1. Write a task file from [task-template.md](task-template.md). Codex writes it; the task is
-   **bounded, not prescribed** — constraints and acceptance criteria, never a list of edits. If
-   Codex specifies every change, the reasoning cost has already been paid and the delegation
-   measured nothing.
-2. Run it in the harness against a clean working tree on its own branch.
-3. Record the outcome in [results.md](results.md).
+   ```cmd
+   scripts\run-task.cmd evaluation\tasks\0001-example.md
+   ```
 
-## What to record
+   It refuses to start against a dirty tree, creates `worker/<id>`, runs Pi headless, then
+   records `events.jsonl`, `diff.patch`, and `run.json` under `runs/<id>/` and returns to the
+   original branch. Run directories are immutable — a repeated id is an error, not an overwrite.
+3. **Claude scores it.** Read the diff — not just the exit code — and add a row to
+   [results.md](results.md).
 
-| Field | Notes |
+## Read the diff, not the exit code
+
+The worker edits files with `cat >>` and `sed -i` rather than structured edit tools
+(see [../docs/harness-pi.md](../docs/harness-pi.md)). `sed` substitutes by pattern, so a pattern
+that matches in more than one place changes all of them silently.
+
+The expected failure mode is therefore **not** "refuses the task" but "changed the wrong line and
+the tests still passed". A green verify command is necessary evidence, not sufficient. Scoring a
+run from `verify.passed` alone would systematically miss exactly the failures that make
+delegation unprofitable.
+
+## What the runner records
+
+`run.json` carries the mechanical metrics so scoring only has to supply judgement:
+
+| Field | Meaning |
 | --- | --- |
-| Task category | boilerplate / tests / docs / small feature / refactor / bugfix / medium feature |
-| Complexity | rough: files touched and whether the design was already known |
-| Worker iterations | how many times the agent looped before stopping |
-| Tests passed | did the acceptance criteria verify without help |
-| Codex repair | did Codex have to fix the result, and how much |
-| Codex takeover | did Codex have to redo it entirely |
-| Inference time | wall clock for the worker run |
-| Diff quality | subjective, one line — would this pass review as-is |
+| `worker.elapsed_seconds` | Wall clock for the run |
+| `worker.timed_out` | Whether it was killed at the timeout |
+| `events.turns` | How many times the agent looped |
+| `events.tool_calls` / `tools_used` | How much work it did, and with which tools |
+| `diff.files_changed`, `lines_added`, `lines_removed` | Size of the change |
+| `diff.untracked_files` | Reported honestly, unfiltered — read before assuming the worker created something odd |
+| `verify.passed` | Exit code of the acceptance command |
 
 ## Outcome classes
 
-Use these consistently; the whole point is the distribution across them.
+Use these consistently; the distribution across them *is* the result.
 
 - **Clean** — acceptance criteria met, diff would pass review unchanged.
-- **Minor repair** — met, but Codex adjusted the result. Still a net saving.
-- **Major repair** — Codex spent more effort fixing than writing it would have cost. A loss.
-- **Takeover** — worker output discarded.
-- **Harness failure** — the model never got a fair attempt (tool-format loop, context exhaustion,
-  runtime crash). Not a capability result; fix the harness and rerun.
+- **Minor repair** — met, but needed adjusting afterwards. Still a net saving.
+- **Major repair** — fixing it cost more than writing it would have. A loss.
+- **Takeover** — output discarded.
+- **Harness failure** — the model never got a fair attempt: tool-format loop, context exhaustion,
+  runtime crash, timeout. Not a capability result; fix the harness and rerun under a new id.
 
 Keeping *harness failure* separate matters. Counting configuration problems as model failures
 would understate the model and send the prototype to the wrong conclusion.

@@ -11,17 +11,22 @@ live outside any repository:
 
 - Model: `C:\models\`
 - Backend: `C:\Tools\llama.cpp-cuda\`
+- Harness provider config: `~/.pi/agent/models.json`
 
-Never commit GGUF files, binaries, or benchmark logs.
+Never commit GGUF files, binaries, or benchmark logs. Run records under `evaluation/runs/` are
+the exception — they are the evaluation's evidence and belong in Git.
 
 ## Working here
 
 - Scripts target CMD (`.cmd`), matching the workstation's default shell.
 - The runtime and the harness stay decoupled. The same `llama-server` endpoint must remain usable
   by unrelated tools, so do not add coding-agent-specific behaviour to the runtime scripts.
-- Do not build custom orchestration at this stage. The prototype's value depends on finding out
-  whether an off-the-shelf harness is sufficient; a bespoke agent loop would answer a different
-  question and cost more to maintain.
+- Do not build a custom agent loop. Pi is the harness; `scripts/run_task.py` only launches it and
+  collects evidence. A bespoke agent loop would answer a different question and cost more to
+  maintain.
+- The runner must never score its own output. It records metrics and the diff; judgement belongs
+  to the reviewing agent. Adding pass/fail heuristics to the runner would hide precisely the
+  quiet failures the evaluation exists to find.
 - `CTX` in `scripts\start-worker.cmd` and the harness's configured context window must stay in
   sync. Changing one without the other produces silent truncation that looks like model failure.
 
