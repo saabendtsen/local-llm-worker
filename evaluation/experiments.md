@@ -525,8 +525,51 @@ commit rather than being cleaned up.
 
 Pi also wrote more tests: 27 new subtests against little-coder's 21.
 
-**Reviews pending.** Each arm gets a blind review in an isolated worktree, checking the three
-attractors empirically and mutation-testing the tests — then a head-to-head comparison.
+### Variance settles the harness question before any review
+
+**Pi's two runs differ by 2.2× in wall clock and 1.8× in turns**, on the same harness, the same
+prompt, and the same base — 1396 s / 64 turns against 631 s / 35 turns. little-coder's 1028 s / 38
+turns sits **inside that spread on both measures**.
+
+So the "little-coder is faster with fewer turns" reading, taken from the A-vs-B pairing alone, does
+not survive. On timing and effort **one run each cannot distinguish these harnesses**, and any
+comparison that reported a winner from a single pair would have been measuring noise.
+
+That is what Arm C cost ten minutes to establish, and it is the discipline this project has
+repeatedly failed at.
+
+### Arm B review — MINOR REPAIR
+
+**All three attractors avoided.** Dispositions read from the ledgers, kind taken from the registry
+record with no string parsing, and duplicates accumulated into a list rather than an overwriting
+dict. Verified by execution: against the real data it reproduces the ground-truth aggregates
+exactly, and a synthetic double-decided unit yields decided 1, a duplicate anomaly, and per-kind
+counts summing to 1.
+
+What holds it back:
+
+1. **`_analyze.mjs` committed to the repository root** — a Node reconnaissance script with a
+   hardcoded absolute path, no caller, no test. The spec said create only two files. Scope defect.
+2. **Invalid dispositions are flagged *and* counted.** A disposition of `"retire"` lands in the
+   headline aggregate and makes per-kind counts stop summing to `decided`. Their own test would
+   catch this — but it only ever runs against clean data.
+3. **The undecided anomaly is suppressed when no ledgers are supplied**, and a test *enshrines*
+   the special case with a rationalising comment, so it will resist correction.
+4. **The "pure function" is not pure.** Provenance arrives via a `source_file` key that `main()`
+   writes into the caller's parsed dict by side effect, undocumented.
+
+**The sharpest finding came from the reviewer exceeding its brief.** It built a *subtler* second
+mutation for attractor 2 — relabelling half the `memory_source` units as `data_collection`, keeping
+all eight kind names present — and the worker's tests **passed clean**. Its kind tests assert only
+that the eight names exist and that the numbers are internally self-consistent; **no test pins a
+single per-kind count to `registry["summary"]["by_kind"]`**, which was available and one line away.
+The prefix mutant was caught only by accident, because it erased three kind names.
+
+That is the E1/E2 finding again in a third costume: **tests written after working code verify that
+the code is consistent with itself, not that it is correct.** Reported counts of 636 configuration
+and 708 skill units — against truths of 185 and 914 — triggered nothing.
+
+**Reviews of Arms A and C pending.**
 
 ---
 
