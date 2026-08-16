@@ -78,18 +78,31 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     return result.stdout
 
 
-def require_clean_tree(repo: Path) -> None:
-    """Refuse to run against a dirty tree.
+def require_clean_tracked_tree(repo: Path) -> None:
+    """Refuse to run when tracked files have uncommitted changes.
 
-    The whole measurement is the diff the worker produced. Uncommitted changes
-    that were already there would be indistinguishable from the worker's work,
-    and worse, the worker could overwrite them.
+    The whole measurement is the diff the worker produced. Pre-existing edits to
+    tracked files would be indistinguishable from the worker's work, and worse,
+    the worker could overwrite them.
+
+    Untracked files are tolerated: real working copies routinely carry local
+    scratch files that have nothing to do with the task. They are snapshotted
+    instead (see `existing_untracked`) and subtracted from the result, so the
+    run still reports only what the worker actually created.
     """
-    if git(repo, "status", "--porcelain").strip():
+    if git(repo, "status", "--porcelain", "--untracked-files=no").strip():
         raise TaskError(
-            f"{repo} has uncommitted changes. Commit or stash them first -- "
-            "the run measures the diff the worker creates, so the tree must start clean."
+            f"{repo} has uncommitted changes to tracked files. Commit or stash them first -- "
+            "the run measures the diff the worker creates, so tracked files must start clean."
         )
+
+
+def existing_untracked(repo: Path) -> set[str]:
+    return {
+        name
+        for name in git(repo, "ls-files", "--others", "--exclude-standard").splitlines()
+        if name
+    }
 
 
 def find_pi() -> str:
@@ -218,7 +231,7 @@ def verify(repo: Path, command: str, timeout: int) -> dict:
     }
 
 
-def diff_stats(repo: Path) -> dict:
+def diff_stats(repo: Path, preexisting: set[str]) -> dict:
     numstat = git(repo, "diff", "--numstat")
     files = added = removed = 0
     for line in numstat.strip().splitlines():
@@ -232,9 +245,8 @@ def diff_stats(repo: Path) -> dict:
         if parts[1].isdigit():
             removed += int(parts[1])
 
-    untracked = [
-        name for name in git(repo, "ls-files", "--others", "--exclude-standard").splitlines() if name
-    ]
+    # Only untracked files that appeared during the run are the worker's doing.
+    untracked = sorted(existing_untracked(repo) - preexisting)
 
     return {
         "files_changed": files,
@@ -279,10 +291,12 @@ def main() -> int:
         return 2
 
     try:
-        require_clean_tree(repo)
+        require_clean_tracked_tree(repo)
     except TaskError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
+
+    preexisting = existing_untracked(repo)
 
     branch = meta.get("branch", f"worker/{task_id}")
     base_commit = git(repo, "rev-parse", "HEAD").strip()
@@ -306,7 +320,7 @@ def main() -> int:
     print(f"  {events['turns']} turns, {events['tool_calls']} tool calls")
 
     (run_dir / "diff.patch").write_text(git(repo, "diff"), encoding="utf-8")
-    stats = diff_stats(repo)
+    stats = diff_stats(repo, preexisting)
     print(f"  {stats['files_changed']} files changed, "
           f"+{stats['lines_added']}/-{stats['lines_removed']}")
     if stats["untracked_files"]:

@@ -52,10 +52,42 @@ behavioural finding it produced is recorded under [Findings](#findings).
 
 | # | Task | Category | Turns | Verify | Outcome | Time | Diff quality |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | | |
+| 0001 | credential path detectors | feature-small | 9 | passed | **takeover** | 254 s | no diff — wrong deliverable |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.
+
+### 0001 — the failure mode, in full
+
+The task asked for a new entry in `PATH_DETECTORS` so the credential-inventory script would
+recognise `.netrc`, `.npmrc`, `.pypirc`, and `kubeconfig`, with tests.
+
+The worker instead **audited the repository for credential files** and returned a confident
+report titled *"Credential-Bearing Config Filename Detection Report"*, concluding *"No hardcoded
+secrets or credential files were found. The workspace is clean."* Across 9 turns and 16 tool
+calls over 254 seconds it never opened `scripts/inventory-git-credential-exposure.py` and never
+opened the test module. It changed nothing.
+
+It did the *subject matter* of the tool rather than the *engineering task about* the tool.
+
+Three things make this the most instructive run so far:
+
+1. **`verify.passed` was `true`.** Nothing changed, and the suite was already green, so the
+   acceptance command reported success. A pipeline scoring on exit codes would have filed this as
+   a win. This is the exact quiet failure the evaluation was built to catch, and it appeared on
+   the very first scored task.
+2. **Tool use was not the problem.** All 16 calls were well-formed, and the exploration was
+   competent. The failure was comprehension of what the deliverable was.
+3. **The framing probably contributed.** The task's heading read *"detect well-known
+   credential-bearing config filenames"* — which is genuinely ambiguous between "make the tool
+   detect these" and "go detect these". A frontier model resolves that from context; this one
+   took the literal reading and never revisited it.
+
+The open question is how much of this is model capability and how much is prompt framing. Rerun
+the same task with an unambiguous imperative opening — naming the file to edit in the first
+sentence — before concluding anything about the task horizon. If explicit framing fixes it, the
+finding is *"this worker needs the deliverable stated as an instruction, not described as an
+outcome"*, which is cheap to accommodate. If it does not, the horizon is lower than hoped.
 
 ## Findings
 

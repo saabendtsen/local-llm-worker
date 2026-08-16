@@ -1,0 +1,37 @@
+{
+  "task_id": "0001-credential-path-detectors",
+  "category": "feature-small",
+  "complexity": "small",
+  "recorded_at": "2026-08-16T15:03:11+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/0001-credential-path-detectors",
+  "base_commit": "ae957ca08d160c1fb063a1f4ffd9bb4ab7ada340",
+  "model": "local-worker/local-worker",
+  "worker": {
+    "elapsed_seconds": 254.0,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "events": {
+    "turns": 9,
+    "tool_calls": 16,
+    "tools_used": {
+      "bash": 12,
+      "read": 4
+    },
+    "malformed_event_lines": 0
+  },
+  "diff": {
+    "files_changed": 0,
+    "lines_added": 0,
+    "lines_removed": 0,
+    "untracked_files": []
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 44%]\n................................................................. [ 86%]\n.....................                                                    [100%]\n154 passed, 11 subtests passed in 26.94s"
+  }
+}
