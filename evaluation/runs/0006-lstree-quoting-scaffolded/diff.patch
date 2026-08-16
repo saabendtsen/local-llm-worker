@@ -1,0 +1,33 @@
+diff --git a/tests/test_inventory_git_credential_exposure.py b/tests/test_inventory_git_credential_exposure.py
+index 2a8a174..d226e4d 100644
+--- a/tests/test_inventory_git_credential_exposure.py
++++ b/tests/test_inventory_git_credential_exposure.py
+@@ -91,6 +91,28 @@ class CredentialInventoryTests(unittest.TestCase):
+             self.assertIn(".env.ääkköset", by_path)
+             self.assertEqual(by_path[".env.ääkköset"]["status"], "current")
+ 
++    def test_inventory_reports_removed_credential_as_history_only(self):
++        with tempfile.TemporaryDirectory() as directory:
++            repository = pathlib.Path(directory)
++            self.git(repository, "init", "-b", "main")
++            self.git(repository, "config", "user.name", "Test")
++            self.git(repository, "config", "user.email", "test@example.invalid")
++            # Non-ASCII name: triggers encoding path that was the original defect.
++            secret_file = repository / "secret-v\u00e4rden.env"
++            secret_file.write_text("api_key=should-not-leak\n", encoding="utf-8")
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "add secret")
++            # Remove the file so it is no longer in HEAD.
++            secret_file.unlink()
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "remove secret")
++
++            report = scanner.inventory(repository)
++
++            by_path = {item["path"]: item for item in report["candidate_paths"]}
++            self.assertIn("secret-v\u00e4rden.env", by_path)
++            self.assertEqual(by_path["secret-v\u00e4rden.env"]["status"], "history-only")
++
+     def test_checked_in_credential_inventories_are_utf8_json_and_value_free(self):
+         inventories = SCRIPT.parents[1] / "inventories"
+         paths = sorted(inventories.glob("legacy-home-server-credential-exposure-*.json"))

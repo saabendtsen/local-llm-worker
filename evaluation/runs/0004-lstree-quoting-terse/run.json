@@ -1,0 +1,46 @@
+{
+  "task_id": "0004-lstree-quoting-terse",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-16T17:06:58+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/0004-lstree-quoting-terse",
+  "base_commit": "ae957ca08d160c1fb063a1f4ffd9bb4ab7ada340",
+  "work_commit": "5d4f13cf063da6d67fdda00cece2b71c41da213a",
+  "model": "local-worker/local-worker",
+  "worker": {
+    "elapsed_seconds": 617.6,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 490,
+    "received_chars": 490,
+    "reason": null
+  },
+  "events": {
+    "turns": 26,
+    "tool_calls": 29,
+    "tools_used": {
+      "bash": 16,
+      "read": 7,
+      "write": 3,
+      "edit": 3
+    },
+    "malformed_event_lines": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 20,
+    "lines_removed": 1,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 43%]\n................................................................. [ 85%]\n......................                                                   [100%]\n155 passed, 11 subtests passed in 28.61s"
+  }
+}

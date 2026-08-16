@@ -1,0 +1,45 @@
+{
+  "task_id": "0007-lstree-quoting-precise-rerun",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-16T17:39:39+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/0007-lstree-quoting-precise-rerun",
+  "base_commit": "5d4f13cf063da6d67fdda00cece2b71c41da213a",
+  "work_commit": "4addeaef1eab30f8059cb0d2e60ad22c2c9be2dd",
+  "model": "local-worker/local-worker",
+  "worker": {
+    "elapsed_seconds": 993.5,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 1602,
+    "received_chars": 1602,
+    "reason": null
+  },
+  "events": {
+    "turns": 31,
+    "tool_calls": 31,
+    "tools_used": {
+      "bash": 26,
+      "read": 3,
+      "edit": 2
+    },
+    "malformed_event_lines": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 23,
+    "lines_removed": 1,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 43%]\n................................................................. [ 85%]\n.......................                                                  [100%]\n156 passed, 11 subtests passed in 31.37s"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "task_id": "0006-lstree-quoting-scaffolded",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-16T17:22:32+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/0006-lstree-quoting-scaffolded",
+  "base_commit": "5d4f13cf063da6d67fdda00cece2b71c41da213a",
+  "work_commit": "227ee17d767a0aff7615398d7a1b584d1ae782c4",
+  "model": "local-worker/local-worker",
+  "worker": {
+    "elapsed_seconds": 350.1,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 3412,
+    "received_chars": 3412,
+    "reason": null
+  },
+  "events": {
+    "turns": 10,
+    "tool_calls": 12,
+    "tools_used": {
+      "bash": 9,
+      "read": 2,
+      "edit": 1
+    },
+    "malformed_event_lines": 0
+  },
+  "diff": {
+    "files_changed": 1,
+    "lines_added": 22,
+    "lines_removed": 0,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 43%]\n................................................................. [ 85%]\n.......................                                                  [100%]\n156 passed, 11 subtests passed in 32.08s"
+  }
+}

@@ -1,0 +1,69 @@
+diff --git a/scripts/inventory-git-credential-exposure.py b/scripts/inventory-git-credential-exposure.py
+index f69e498..451f4bd 100644
+--- a/scripts/inventory-git-credential-exposure.py
++++ b/scripts/inventory-git-credential-exposure.py
+@@ -114,7 +114,14 @@ def inventory(repository: pathlib.Path) -> dict[str, Any]:
+                 candidates[path].add(detector)
+                 observed_in[path].add(commit)
+ 
+-    head_paths = set(str(git(repository, "ls-tree", "-r", "--name-only", "HEAD")).splitlines())
++    head_tree_output = bytes(
++        git(repository, "ls-tree", "-r", "--name-only", "-z", "HEAD", text=False)
++    )
++    head_paths = {
++        p
++        for p in head_tree_output.decode("utf-8", errors="surrogateescape").split("\0")
++        if p
++    }
+     records = []
+     for path in sorted(candidates, key=str.lower):
+         history_lines = str(
+diff --git a/tests/test_inventory_git_credential_exposure.py b/tests/test_inventory_git_credential_exposure.py
+index e593252..182e7ff 100644
+--- a/tests/test_inventory_git_credential_exposure.py
++++ b/tests/test_inventory_git_credential_exposure.py
+@@ -73,6 +73,44 @@ class CredentialInventoryTests(unittest.TestCase):
+                 [item["path"] for item in report["candidate_paths"]],
+             )
+ 
++    def test_non_ascii_path_status_is_current_when_in_head(self):
++        with tempfile.TemporaryDirectory() as directory:
++            repository = pathlib.Path(directory)
++            self.git(repository, "init", "-b", "main")
++            self.git(repository, "config", "user.name", "Test")
++            self.git(repository, "config", "user.email", "test@example.invalid")
++            # Non-ASCII directory with a credential-bearing file
++            (repository / "caf\u00e9").mkdir()
++            (repository / "caf\u00e9" / "credentials.json").write_text("{}", encoding="utf-8")
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "add caf\u00e9/credentials.json")
++
++            report = scanner.inventory(repository)
++
++            by_path = {item["path"]: item for item in report["candidate_paths"]}
++            # Key must exist and be classified as current, not history-only
++            self.assertIn("caf\u00e9/credentials.json", by_path)
++            self.assertEqual(by_path["caf\u00e9/credentials.json"]["status"], "current")
++
++    def test_removed_path_reports_history_only(self):
++        with tempfile.TemporaryDirectory() as directory:
++            repository = pathlib.Path(directory)
++            self.git(repository, "init", "-b", "main")
++            self.git(repository, "config", "user.name", "Test")
++            self.git(repository, "config", "user.email", "test@example.invalid")
++            (repository / "secrets.txt").write_text("data", encoding="utf-8")
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "add secrets.txt")
++            (repository / "secrets.txt").unlink()
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "remove secrets.txt")
++
++            report = scanner.inventory(repository)
++
++            by_path = {item["path"]: item for item in report["candidate_paths"]}
++            self.assertIn("secrets.txt", by_path)
++            self.assertEqual(by_path["secrets.txt"]["status"], "history-only")
++
+     def test_checked_in_credential_inventories_are_utf8_json_and_value_free(self):
+         inventories = SCRIPT.parents[1] / "inventories"
+         paths = sorted(inventories.glob("legacy-home-server-credential-exposure-*.json"))

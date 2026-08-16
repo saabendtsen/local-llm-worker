@@ -48,13 +48,60 @@ speed.
 3. The interesting outcome is if 0004 produces a plausible-but-wrong fix. That would be the
    quiet-failure mode, and would make scaffolding a correctness requirement rather than a nicety.
 
-**Result.** _Partial._
+**Result.**
 
-| Run | Framing | Wall clock | Turns | Tools | Diff | Verify | Review verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 0004 | Minimal | 617.6 s | 26 | 29 | 2 files, +20/−1 | passed | **CLEAN** |
-| 0005 | Precise | — | — | — | — | — | **void — contaminated, see below** |
-| 0006 | Scaffolded | pending | | | | | |
+Three runs with a verified-clean base (`ae957ca`) and verified prompt delivery:
+
+| Run | Framing | Wall clock | Turns | Diff | Verify | Review verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0004 | Minimal | 617.6 s | 26 | 2 files, +20/−1 | passed | **CLEAN** |
+| 0009 | Precise | 1377.9 s | 2 | **0 files** | passed(!) | **FAILED — reasoning runaway** |
+| 0008 | Scaffolded | 210.3 s | 8 | 2 files, +40/−1 | passed | **CLEAN** |
+
+Voided runs, kept for the record: 0005 (clean base, but a review agent mutated the tree mid-run),
+0006 and 0007 (branched from 0004's commit, so they began with the defect already fixed).
+
+**Detail buys speed, not correctness.** Both the minimal and the fully scaffolded framing produced
+correct, mergeable fixes that avoided the `exists()` trap and passed mutation testing. The
+scaffolded run got there in **8 turns and 210 s** against **26 turns and 617 s** — roughly a third
+of the effort for the same outcome. The minimal variant spent its extra turns writing standalone
+repro scripts to rediscover what the scaffolded task simply stated.
+
+**The scaffolding did not transfer to test design.** This is the sharpest finding. The scaffolded
+task explicitly warned about the `exists()` trap and explained why it is wrong. The worker duly
+avoided it *in the implementation* — and then wrote tests that do not catch it. The reviewer
+substituted the wrong fix and ran 0008's own tests against it: **6 passed**. Its removed-path test
+unlinks the file from disk as well as from the index, so it cannot distinguish tree membership
+from filesystem existence. One extra line — recreating the file on disk after the removal commit —
+would have made it trap-proof.
+
+So a warning in the task shapes what the worker *does* but not what it *defends against*. If a
+test must discriminate against a specific wrong implementation, say so explicitly; do not assume
+that explaining the trap produces a test for it.
+
+**0009 is not a framing result.** It failed for an unrelated reason: it spent its entire
+32,000-token output budget reasoning, stopped mid-sentence with `stop: "length"`, and took no
+action in 23 minutes. Prompt delivery was verified intact (1602 chars sent and received), so this
+was the model, not the harness.
+
+**Variance swamps the framing effect.** Run 0005 used the same precise framing on a clean base and
+produced a working fix in 519 s / 12 turns; run 0009 produced nothing in 1378 s. Same task, same
+wording, opposite outcomes. That spread is wider than the difference between minimal and scaffolded
+framing, which means **n=1 per cell cannot support a framing conclusion** — and the reasoning-budget
+fix has since changed the system under test, so these numbers are not directly comparable to future
+ones.
+
+**Learning.**
+
+1. Write scaffolded tasks — not because the worker cannot cope without them, but because they cost
+   about a third of the wall clock for the same result. On a worker running at 25 tok/s that is the
+   difference between a 3-minute and a 10-minute task.
+2. State test requirements as explicitly as implementation requirements. Warning about a trap does
+   not produce a test for the trap.
+3. The dominant risk is not task wording, it is variance — and specifically the possibility of the
+   worker disappearing into its own reasoning and returning nothing. `THINK_MAX` now bounds that.
+4. `verify: passed` appeared on a 23-minute no-op. Third occurrence today of the same shape. The
+   rule stands: score from the diff.
 
 **0004, the minimal framing, came back clean.** Given only the symptom — no file named, no
 approach, no edge cases, no conventions — it found the right line, applied the right fix (`-z`

@@ -1,0 +1,46 @@
+diff --git a/scripts/inventory-git-credential-exposure.py b/scripts/inventory-git-credential-exposure.py
+index 2b3e7e5..58e2790 100644
+--- a/scripts/inventory-git-credential-exposure.py
++++ b/scripts/inventory-git-credential-exposure.py
+@@ -115,7 +115,7 @@ def inventory(repository: pathlib.Path) -> dict[str, Any]:
+                 observed_in[path].add(commit)
+ 
+     head_raw = git(repository, "ls-tree", "-r", "--name-only", "-z", "HEAD", text=False)
+-    head_paths = {p.decode("utf-8", errors="surrogateescape") for p in head_raw.split(b"\0") if p}
++    head_paths = {p for p in head_raw.decode("utf-8", errors="surrogateescape").split("\0") if p}
+     records = []
+     for path in sorted(candidates, key=str.lower):
+         history_lines = str(
+diff --git a/tests/test_inventory_git_credential_exposure.py b/tests/test_inventory_git_credential_exposure.py
+index 2a8a174..9501ad7 100644
+--- a/tests/test_inventory_git_credential_exposure.py
++++ b/tests/test_inventory_git_credential_exposure.py
+@@ -91,6 +91,28 @@ class CredentialInventoryTests(unittest.TestCase):
+             self.assertIn(".env.ääkköset", by_path)
+             self.assertEqual(by_path[".env.ääkköset"]["status"], "current")
+ 
++    def test_inventory_reports_removed_credential_as_history_only(self):
++        with tempfile.TemporaryDirectory() as directory:
++            repository = pathlib.Path(directory)
++            self.git(repository, "init", "-b", "main")
++            self.git(repository, "config", "user.name", "Test")
++            self.git(repository, "config", "user.email", "test@example.invalid")
++            # Non-ASCII name — triggers encoding path that exposed the original defect.
++            secret_file = repository / "secret-v\u00e4rden.env"
++            secret_file.write_text("api_key=should-not-leak\n", encoding="utf-8")
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "add secret")
++            # Remove the file so it is no longer in HEAD.
++            secret_file.unlink()
++            self.git(repository, "add", ".")
++            self.git(repository, "commit", "-m", "remove secret")
++
++            report = scanner.inventory(repository)
++
++            by_path = {item["path"]: item for item in report["candidate_paths"]}
++            self.assertIn("secret-v\u00e4rden.env", by_path)
++            self.assertEqual(by_path["secret-v\u00e4rden.env"]["status"], "history-only")
++
+     def test_checked_in_credential_inventories_are_utf8_json_and_value_free(self):
+         inventories = SCRIPT.parents[1] / "inventories"
+         paths = sorted(inventories.glob("legacy-home-server-credential-exposure-*.json"))

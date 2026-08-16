@@ -55,6 +55,12 @@ behavioural finding it produced is recorded under [Findings](#findings).
 | 0001 | credential path detectors | feature-small | 9 | passed | **harness failure** | 254 s | n/a — prompt truncated |
 | 0002 | same, imperative framing | feature-small | 1 | passed | **harness failure** | 16 s | n/a — prompt truncated |
 | 0003 | same task, prompt delivered | feature-small | 15 | passed | **clean** | 351 s | correct, tested, in-style |
+| 0004 | ls-tree quoting, minimal framing | bugfix | 26 | passed | **clean** | 618 s | correct, trap avoided, test discriminates |
+| 0005 | same, precise framing | bugfix | 12 | passed | **void** | 519 s | tree mutated mid-run |
+| 0006 | same, scaffolded framing | bugfix | 10 | passed | **void** | 350 s | contaminated base |
+| 0007 | same, precise rerun | bugfix | 31 | passed | **void** | 994 s | contaminated base |
+| 0008 | same, scaffolded, clean base | bugfix | 8 | passed | **clean** | 210 s | correct, trap avoided, tests do not discriminate |
+| 0009 | same, precise, clean base | bugfix | 2 | passed(!) | **takeover** | 1378 s | no diff — reasoning runaway, `stop: length` at 32k tokens |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.

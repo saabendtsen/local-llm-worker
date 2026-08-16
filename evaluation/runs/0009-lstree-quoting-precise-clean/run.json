@@ -1,0 +1,43 @@
+{
+  "task_id": "0009-lstree-quoting-precise-clean",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-16T18:07:12+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/0009-lstree-quoting-precise-clean",
+  "base_commit": "ae957ca08d160c1fb063a1f4ffd9bb4ab7ada340",
+  "work_commit": null,
+  "model": "local-worker/local-worker",
+  "worker": {
+    "elapsed_seconds": 1377.9,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 1602,
+    "received_chars": 1602,
+    "reason": null
+  },
+  "events": {
+    "turns": 2,
+    "tool_calls": 2,
+    "tools_used": {
+      "read": 2
+    },
+    "malformed_event_lines": 0
+  },
+  "diff": {
+    "files_changed": 0,
+    "lines_added": 0,
+    "lines_removed": 0,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": ".................................................................... [ 44%]\n................................................................. [ 86%]\n.....................                                                    [100%]\n154 passed, 11 subtests passed in 27.49s"
+  }
+}
