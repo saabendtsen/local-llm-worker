@@ -64,6 +64,7 @@ scripts\run-task.cmd evaluation\tasks\0001-example.md
 | `scripts/run_task.py` | Execute one delegated task and record the evidence |
 | `docs/runtime.md` | Model, backend, flag rationale, tuning |
 | `docs/harness-pi.md` | Pi configuration and observed worker behaviour |
+| `docs/using-small-models.md` | Standing reference: how to get useful work out of a small local model |
 | `evaluation/` | Task specs, run records, results |
 
 ## Hardware
