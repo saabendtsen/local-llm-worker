@@ -360,10 +360,14 @@ and names bulk-test-writing as the *horizontal slicing* anti-pattern: *"Bulk tes
 behavior."* E4 as designed is one prove-it-fails gate over a task-sized batch of tests, which is
 closer to what the skill condemns.
 
-Two honest reconciliations: size each task so that one test *is* the task, which fits the existing
-task sizing; or keep the batch and accept that the enumerate-the-cases discipline substitutes for
-the incremental feedback the skill relies on. Pick one consciously rather than discovering the
-conflict mid-run.
+**Resolved (Søren, 2026-08-17): one test per cycle during the startup phase, scaling up per cycle
+once the worker has earned trust.** The skill's discipline wins while there is no track record to
+lean on, and the batch size becomes a dial that opens as reliability is demonstrated rather than a
+bet taken up front. It also makes E4's must-fail gate cheap — one test per cycle means one test run
+per gate.
+
+This has a pleasant side effect: task size becomes the unit of trust. "How much can be handed over
+per cycle" is then a measured quantity with a history behind it, not a guess.
 
 The skill also independently confirms E6's finding, in its own words: *"the assertion recomputes
 the expected value the way the code does… so it passes by construction and can never disagree with
@@ -655,6 +659,63 @@ constraint for this use.
    it equals `registry["summary"]["by_kind"]`". Without that, expect self-consistency checks.
 4. **Variance is the dominant effect and must be designed around.** A 2.2× spread on identical
    inputs means single-run comparisons are worthless. Every future A/B needs a repeat arm.
+
+---
+
+## E7 — Can the worker review code usefully?
+
+**Status:** designed 2026-08-17, not yet run
+
+**Question.** Should the pipeline have the worker review its own output and fix findings *before*
+anything reaches the frontier model? That would move the most expensive remaining step — reading a
+diff carefully — off the metered side.
+
+**The distinction that makes it plausible.** Self-review by the model that just wrote the code is
+the *same failure mode* as self-written tests: it verifies that the code agrees with the author's
+intent. E6 showed exactly that — three suites of self-consistency checks.
+
+But a **fresh instance reviewing a diff it did not write** is a different thing. It has no memory
+of the reasoning, no investment in the design, and sees only the specification and the change. That
+is peer review, not self-review, and it is what every blind review in this project has been.
+
+So the pipeline shape under test is: worker builds → **second worker run, fresh context, reviews
+the diff blind** → worker fixes findings → frontier model sees the result.
+
+**Ground truth already exists, which is what makes this cheap.** E6 produced three diffs, each
+reviewed in depth by a frontier reviewer working in an isolated worktree, each with an itemised
+findings list verified by execution and mutation testing. The defects are known and documented:
+
+| Diff | Known findings include |
+| --- | --- |
+| `f01-pi` | traceback on malformed JSON; summary and per-kind `decided_count` contradict each other when a disposition is invalid; no de-duplication of ledger sources; `main()` untested; tautological test |
+| `f01-lc` | committed scratch file `_analyze.mjs`; invalid dispositions flagged *and* counted; undecided anomaly suppressed with zero ledgers; impure function fed by a side-effect key |
+| `f01-pi-repeat` | `unknown_units` filtered by duplicates, silently swallowing an anomaly; only `FileNotFoundError`/`JSONDecodeError` caught; no shape validation; `--ledgers` required, foreclosing the zero-ledger case |
+
+**Method.** Run the local model over each of the three diffs, in a fresh context, using a review
+prompt adapted from the Matt Pocock `code-review` skill — the skill itself cannot run headlessly,
+since it spawns parallel subagents. Score its findings against the frontier reviews:
+
+- **Hits** — real defects it found, weighted by severity. Did it find the *load-bearing* ones?
+- **Misses** — documented defects it did not find.
+- **False positives** — things it flagged that the frontier reviewer examined and dismissed, or
+  that are simply wrong. These are the expensive failure: a pipeline that acts on them makes the
+  code worse, and "fix your findings" then means damaging working code.
+- **Verification** — did it check claims by reading code and running commands, or assert from the
+  diff alone?
+
+**Predictions, recorded in advance.**
+1. It will find the *obvious* defects — the committed scratch file, missing error handling — and
+   miss the *subtle* ones, particularly the two-numbers-disagree contradictions, which require
+   holding two parts of the report in mind at once.
+2. False positives are the real risk, not misses. A miss costs nothing; a confident wrong finding
+   that the pipeline then "fixes" costs working code.
+3. It will not catch the test-quality findings at all. Judging whether a test discriminates required
+   the frontier reviewers to *mutate the implementation and re-run* — several steps beyond reading.
+
+**Decision rule.** Worth putting in the pipeline if hits on real defects clearly exceed false
+positives *and* the false positives are cheap to dismiss. If it produces plausible-but-wrong
+findings at any rate, the fix step must not be automatic — findings become a hint for the frontier
+reviewer rather than a work item for the worker.
 
 ---
 
