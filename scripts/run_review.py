@@ -36,7 +36,8 @@ from run_task import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REVIEW_PROMPT = REPO_ROOT / "prompts" / "review-diff.md"
+PROMPTS_DIR = REPO_ROOT / "prompts"
+REVIEW_PROMPT = PROMPTS_DIR / "review-diff.md"
 
 
 # Windows caps a command line at 32767 characters, and the prompt is passed as
@@ -46,7 +47,8 @@ REVIEW_PROMPT = REPO_ROOT / "prompts" / "review-diff.md"
 MAX_PROMPT_CHARS = 30000
 
 
-def build_prompt(spec_body: str, base: str, branch: str, diff_path: Path) -> str:
+def build_prompt(spec_body: str, base: str, branch: str, diff_path: Path,
+                 prompt_file: Path = REVIEW_PROMPT) -> str:
     """Assemble the reviewer's prompt.
 
     The diff is passed by *path*, not inlined. Inlining it is tempting -- a
@@ -55,7 +57,7 @@ def build_prompt(spec_body: str, base: str, branch: str, diff_path: Path) -> str
     repository checked out and is told the exact command, so nothing is lost
     except the shortcut.
     """
-    instructions = REVIEW_PROMPT.read_text(encoding="utf-8")
+    instructions = prompt_file.read_text(encoding="utf-8")
     return (
         f"{instructions}\n\n"
         f"---\n\n"
@@ -79,6 +81,14 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path(r"C:\Dev\homelab"))
     parser.add_argument("--model", default="local-worker/local-worker")
     parser.add_argument("--harness", choices=("pi", "little-coder"), default="pi")
+    parser.add_argument(
+        "--prompt",
+        default="review-diff",
+        help="which review prompt in prompts/ to use, without the .md. The broad 'review-diff' "
+             "covers every axis at once; the narrow 'review-focus-*' prompts each hunt one class "
+             "of defect, restoring by separate runs the context isolation the original skill got "
+             "from parallel subagents.",
+    )
     parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args()
 
@@ -116,7 +126,11 @@ def main() -> int:
         diff_path = (run_dir / "under-review.patch").resolve()
         diff_path.write_text(diff, encoding="utf-8")
 
-        prompt = build_prompt(spec_body, base, args.branch, diff_path)
+        prompt_file = PROMPTS_DIR / f"{args.prompt}.md"
+        if not prompt_file.is_file():
+            print(f"ERROR: no prompt at {prompt_file}", file=sys.stderr)
+            return 2
+        prompt = build_prompt(spec_body, base, args.branch, diff_path, prompt_file)
         (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
 
         if len(prompt) > MAX_PROMPT_CHARS:
