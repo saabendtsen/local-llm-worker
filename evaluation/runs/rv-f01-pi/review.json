@@ -1,0 +1,30 @@
+{
+  "review_id": "rv-f01-pi",
+  "recorded_at": "2026-08-17T18:58:52+00:00",
+  "branch": "worker/f01-pi",
+  "base": "experiment/74-local-llm-worker",
+  "spec": "evaluation\\tasks\\f01-migration-coverage-report.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 607.1,
+  "timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 35,
+    "tool_calls": 44,
+    "tools_used": {
+      "bash": 38,
+      "read": 6
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 3
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 14318,
+    "received_chars": 14318,
+    "reason": null
+  },
+  "reviewer_modified_worktree": false,
+  "stderr_tail": ""
+}
