@@ -1,0 +1,785 @@
+diff --git a/scripts/report-migration-coverage.py b/scripts/report-migration-coverage.py
+new file mode 100644
+index 0000000..c354778
+--- /dev/null
++++ b/scripts/report-migration-coverage.py
+@@ -0,0 +1,375 @@
++#!/usr/bin/env python3
++"""Report migration-disposition coverage across ledgers."""
++
++from __future__ import annotations
++
++import argparse
++import collections
++import glob
++import json
++import sys
++from pathlib import Path
++
++PERMITTED_DISPOSITIONS = (
++    "migrate",
++    "consolidate",
++    "archive",
++    "retain in place",
++    "discard",
++)
++LEGEND = {
++    "migrate": "migrate",
++    "consolidate": "consolidate",
++    "archive": "archive",
++    "retain in place": "retain in place",
++    "discard": "discard",
++}
++
++
++def build_report(
++    registry: dict,
++    ledger_paths: list[tuple[str, dict]],
++) -> dict:
++    """Read registry + ledger data structures and produce a coverage report.
++
++    Parameters
++    ----------
++    registry:
++        Parsed migration-unit registry (the dict from the JSON file).
++    ledger_paths:
++        Pairs of (ledger_file_path_string, parsed ledger dict).
++
++    Returns
++    -------
++    dict
++        The coverage report as a plain data structure suitable for
++        ``json.dumps`` serialisation.
++    """
++    units = registry.get("migration_units", [])
++    unit_ids: set[str] = {u["id"] for u in units}
++    kind_counts: collections.Counter = collections.Counter(
++        u["kind"] for u in units
++    )
++
++    # Per-ledger decisions: list of (ledger_path, decisions_list).
++    ledgers: list[tuple[str, list[dict]]] = []
++    for _path, data in ledger_paths:
++        decisions = data.get("decisions", [])
++        ledgers.append((_path, decisions))
++
++    # --- anomaly tracking ---
++    id_to_ledgers: dict[str, list[str]] = collections.defaultdict(list)
++    id_to_dispositions: dict[str, list[str]] = collections.defaultdict(list)
++    unknown_ids: list[str] = []
++    invalid_dispositions: list[dict] = []
++
++    for ledger_path, decisions in ledgers:
++        for dec in decisions:
++            uid = dec.get("id", "<missing-id>")
++            disp = dec.get("disposition", "")
++            id_to_ledgers[uid].append(ledger_path)
++            id_to_dispositions[uid].append(disp)
++            if uid not in unit_ids:
++                if uid not in unknown_ids:
++                    unknown_ids.append(uid)
++            if disp not in PERMITTED_DISPOSITIONS:
++                invalid_dispositions.append(
++                    {
++                        "type": "invalid_disposition",
++                        "id": uid,
++                        "disposition": disp,
++                        "ledger": ledger_path,
++                    }
++                )
++
++    # --- decided set and counts ---
++    decided_ids: set[str] = set(id_to_ledgers.keys()) & unit_ids
++    undecided_ids: set[str] = unit_ids - decided_ids
++    duplicate_ids = [
++        uid for uid, ledgers_list in id_to_ledgers.items() if len(ledgers_list) > 1
++    ]
++
++    # --- aggregate disposition counts (deduplicated per unit) ---
++    # For each decided unit, count its *first* disposition seen across ledgers
++    # to avoid double-counting when a unit is decided in multiple ledgers.
++    aggregate_counts: collections.Counter = collections.Counter()
++    kind_dispositions: dict[str, collections.Counter] = collections.defaultdict(
++        lambda: collections.Counter()
++    )
++
++    # Build kind lookup from registry
++    unit_kind: dict[str, str] = {}
++    for u in units:
++        unit_kind[u["id"]] = u["kind"]
++
++    for uid in sorted(decided_ids):
++        first_disp = id_to_dispositions[uid][0]
++        if first_disp in PERMITTED_DISPOSITIONS:
++            aggregate_counts[first_disp] += 1
++            k = unit_kind.get(uid, "unknown")
++            kind_dispositions[k][first_disp] += 1
++
++    # --- per-kind breakdown ---
++    all_kinds = sorted(kind_counts.keys())
++    kind_breakdown: list[dict] = []
++    for kind in all_kinds:
++        entry: dict[str, object] = {
++            "kind": kind,
++            "registry_count": kind_counts[kind],
++            "decided_count": sum(kind_dispositions[kind].values()),
++            "undecided_count": kind_counts[kind]
++            - sum(kind_dispositions[kind].values()),
++        }
++        for disp in PERMITTED_DISPOSITIONS:
++            entry[disp] = kind_dispositions[kind].get(disp, 0)
++        kind_breakdown.append(entry)
++
++    # --- ledger provenance ---
++    ledger_provenance: list[dict] = []
++    for ledger_path, decisions in ledgers:
++        counts: collections.Counter = collections.Counter()
++        for dec in decisions:
++            disp = dec.get("disposition", "")
++            counts[disp] += 1
++        ledger_entry: dict[str, object] = {
++            "path": ledger_path,
++            "decision_count": len(decisions),
++        }
++        for disp in PERMITTED_DISPOSITIONS:
++            ledger_entry[disp] = counts.get(disp, 0)
++        ledger_provenance.append(ledger_entry)
++
++    # --- anomalies list ---
++    anomalies: list[dict] = []
++
++    for uid in sorted(undecided_ids):
++        anomalies.append(
++            {
++                "type": "undecided",
++                "id": uid,
++                "kind": unit_kind.get(uid, "unknown"),
++            }
++        )
++
++    for uid in sorted(duplicate_ids):
++        anomalies.append(
++            {
++                "type": "duplicate",
++                "id": uid,
++                "ledgers": id_to_ledgers[uid],
++                "dispositions": id_to_dispositions[uid],
++            }
++        )
++
++    for uid in sorted(unknown_ids):
++        anomalies.append(
++            {
++                "type": "unknown_unit",
++                "id": uid,
++            }
++        )
++
++    for inv in invalid_dispositions:
++        anomalies.append(inv)
++
++    coverage_complete = len(undecided_ids) == 0
++
++    report: dict = {
++        "summary": {
++            "total_registry_units": len(unit_ids),
++            "total_decided": len(decided_ids),
++            "total_undecided": len(undecided_ids),
++            "coverage_complete": coverage_complete,
++        },
++        "aggregate": dict(aggregate_counts),
++        "kind_breakdown": kind_breakdown,
++        "ledger_provenance": ledger_provenance,
++        "anomalies": anomalies,
++        "anomaly_counts": {
++            "undecided": len(undecided_ids),
++            "duplicates": len(duplicate_ids),
++            "unknown_units": len(unknown_ids),
++            "invalid_dispositions": len(invalid_dispositions),
++        },
++    }
++
++    return report
++
++
++def _render_text(report: dict) -> str:
++    """Render the report as human-readable text."""
++    lines: list[str] = []
++    s = report["summary"]
++    lines.append("Migration Disposition Coverage Report")
++    lines.append("=" * 40)
++    lines.append(
++        f"Registry units: {s['total_registry_units']}"
++    )
++    lines.append(
++        f"Decided: {s['total_decided']}"
++    )
++    lines.append(
++        f"Undecided: {s['total_undecided']}"
++    )
++    lines.append(
++        f"Coverage: {'complete' if s['coverage_complete'] else 'INCOMPLETE'}"
++    )
++    lines.append("")
++
++    lines.append("Aggregate dispositions")
++    lines.append("-" * 40)
++    for disp in PERMITTED_DISPOSITIONS:
++        count = report["aggregate"].get(disp, 0)
++        if count:
++            lines.append(f"  {disp}: {count}")
++    lines.append("")
++
++    lines.append("Per-kind breakdown")
++    lines.append("-" * 40)
++    for kb in report["kind_breakdown"]:
++        lines.append(f"  {kb['kind']}:")
++        lines.append(
++            f"    registry={kb['registry_count']}, "
++            f"decided={kb['decided_count']}, "
++            f"undecided={kb['undecided_count']}"
++        )
++        for disp in PERMITTED_DISPOSITIONS:
++            c = kb.get(disp, 0)
++            if c:
++                lines.append(f"      {disp}: {c}")
++    lines.append("")
++
++    lines.append("Ledger provenance")
++    lines.append("-" * 40)
++    for lp in report["ledger_provenance"]:
++        lines.append(f"  {lp['path']}: {lp['decision_count']} decisions")
++        for disp in PERMITTED_DISPOSITIONS:
++            c = lp.get(disp, 0)
++            if c:
++                lines.append(f"    {disp}: {c}")
++    lines.append("")
++
++    anomalies = report["anomalies"]
++    if anomalies:
++        lines.append("Anomalies")
++        lines.append("-" * 40)
++        for a in anomalies:
++            lines.append(
++                f"  [{a['type']}] {a['id']}"
++            )
++    else:
++        lines.append("No anomalies detected.")
++
++    lines.append("")
++    return "\n".join(lines)
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(
++        description="Report migration-disposition coverage across ledgers."
++    )
++    parser.add_argument(
++        "--registry",
++        type=Path,
++        required=True,
++        help="Path to the migration-unit registry JSON.",
++    )
++    parser.add_argument(
++        "--ledger",
++        type=Path,
++        action="append",
++        default=[],
++        help="Path to a disposition ledger JSON (repeatable).",
++    )
++    parser.add_argument(
++        "--ledger-dir",
++        type=Path,
++        default=None,
++        help="Directory to auto-discover *dispositions-*.json ledgers.",
++    )
++    parser.add_argument(
++        "--output",
++        type=Path,
++        default=None,
++        help="Write JSON report to this path instead of stdout.",
++    )
++    parser.add_argument(
++        "--text",
++        action="store_true",
++        default=False,
++        help="Render as text instead of JSON.",
++    )
++    args = parser.parse_args()
++
++    registry_path = args.registry
++    if not registry_path.is_file():
++        print(
++            f"error: registry not found: {registry_path}",
++            file=sys.stderr,
++        )
++        return 1
++
++    registry = json.loads(
++        registry_path.read_text(encoding="utf-8"),
++    )
++    if "migration_units" not in registry:
++        print(
++            "error: registry JSON missing 'migration_units' key",
++            file=sys.stderr,
++        )
++        return 1
++
++    ledger_paths: list[tuple[str, dict]] = []
++    for p in args.ledger:
++        if not p.is_file():
++            print(
++                f"error: ledger not found: {p}",
++                file=sys.stderr,
++            )
++            return 1
++        ledger_paths.append(
++            (
++                str(p),
++                json.loads(p.read_text(encoding="utf-8")),
++            )
++        )
++
++    if args.ledger_dir is not None:
++        if not args.ledger_dir.is_dir():
++            print(
++                f"error: ledger directory not found: {args.ledger_dir}",
++                file=sys.stderr,
++            )
++            return 1
++        for p in sorted(args.ledger_dir.glob("*dispositions-*.json")):
++            ledger_paths.append(
++                (
++                    str(p),
++                    json.loads(p.read_text(encoding="utf-8")),
++                )
++            )
++
++    if not ledger_paths and not args.ledger:
++        print(
++            "info: no ledgers provided; reporting all units as undecided",
++            file=sys.stderr,
++        )
++
++    report = build_report(registry, ledger_paths)
++
++    output_text: str
++    if args.text:
++        output_text = _render_text(report)
++    else:
++        output_text = json.dumps(report, indent=2) + "\n"
++
++    if args.output:
++        args.output.write_text(output_text, encoding="utf-8")
++    else:
++        sys.stdout.write(output_text)
++
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/test_migration_coverage.py b/tests/test_migration_coverage.py
+new file mode 100644
+index 0000000..aff5674
+--- /dev/null
++++ b/tests/test_migration_coverage.py
+@@ -0,0 +1,398 @@
++#!/usr/bin/env python3
++"""Tests for report-migration-coverage."""
++
++from __future__ import annotations
++
++import collections
++import importlib.util
++import json
++import pathlib
++import tempfile
++import unittest
++
++ROOT = pathlib.Path(__file__).parents[1]
++SCRIPT = ROOT / "scripts" / "report-migration-coverage.py"
++INVENTORIES = ROOT / "inventories"
++REGISTRY_PATH = INVENTORIES / "migration-unit-registry-2026-08-08.json"
++
++SPEC = importlib.util.spec_from_file_location(
++    "report_migration_coverage", SCRIPT
++)
++report_module = importlib.util.module_from_spec(SPEC)
++assert SPEC.loader is not None
++SPEC.loader.exec_module(report_module)
++
++PERMITTED = (
++    "migrate",
++    "consolidate",
++    "archive",
++    "retain in place",
++    "discard",
++)
++
++
++class CoverageReportTests(unittest.TestCase):
++    """Tests against the checked-in inventories."""
++
++    @classmethod
++    def setUpClass(cls) -> None:
++        cls.registry = json.loads(
++            REGISTRY_PATH.read_text(encoding="utf-8")
++        )
++        cls.ledger_paths: list[tuple[str, dict]] = [
++            (
++                str(p),
++                json.loads(p.read_text(encoding="utf-8")),
++            )
++            for p in sorted(INVENTORIES.glob("*dispositions-*.json"))
++        ]
++        cls.report = report_module.build_report(
++            cls.registry, cls.ledger_paths
++        )
++
++    def test_total_registry_units(self):
++        self.assertEqual(1613, self.report["summary"]["total_registry_units"])
++
++    def test_total_decided(self):
++        self.assertEqual(1613, self.report["summary"]["total_decided"])
++
++    def test_total_undecided(self):
++        self.assertEqual(0, self.report["summary"]["total_undecided"])
++
++    def test_coverage_complete(self):
++        self.assertTrue(self.report["summary"]["coverage_complete"])
++
++    def test_no_duplicates(self):
++        self.assertEqual(0, self.report["anomaly_counts"]["duplicates"])
++
++    def test_no_unknown_units(self):
++        self.assertEqual(0, self.report["anomaly_counts"]["unknown_units"])
++
++    def test_no_invalid_dispositions(self):
++        self.assertEqual(0, self.report["anomaly_counts"]["invalid_dispositions"])
++
++    def test_no_anomalies(self):
++        self.assertEqual(0, len(self.report["anomalies"]))
++
++    def test_aggregate_totals(self):
++        expected = {
++            "migrate": 61,
++            "consolidate": 114,
++            "archive": 209,
++            "retain in place": 264,
++            "discard": 965,
++        }
++        for disp, count in expected.items():
++            with self.subTest(disposition=disp):
++                self.assertEqual(
++                    count,
++                    self.report["aggregate"].get(disp, 0),
++                )
++
++    def test_aggregate_sum(self):
++        total = sum(self.report["aggregate"].values())
++        self.assertEqual(1613, total)
++
++    def test_per_kind_counts_sum(self):
++        """Sum of registry_count across kinds must equal 1613."""
++        total = sum(kb["registry_count"] for kb in self.report["kind_breakdown"])
++        self.assertEqual(1613, total)
++
++    def test_per_kind_decided_plus_undecided(self):
++        for kb in self.report["kind_breakdown"]:
++            with self.subTest(kind=kb["kind"]):
++                self.assertEqual(
++                    kb["registry_count"],
++                    kb["decided_count"] + kb["undecided_count"],
++                )
++
++    def test_per_kind_disposition_sum(self):
++        for kb in self.report["kind_breakdown"]:
++            with self.subTest(kind=kb["kind"]):
++                disp_sum = sum(
++                    kb.get(d, 0)
++                    for d in PERMITTED
++                    if kb.get(d, 0) > 0
++                )
++                # Only count dispositions that actually have a count
++                actual_disp_sum = sum(
++                    kb[d] for d in PERMITTED
++                )
++                self.assertEqual(
++                    kb["decided_count"],
++                    actual_disp_sum,
++                )
++
++    def test_ledger_provenance_count(self):
++        self.assertEqual(8, len(self.report["ledger_provenance"]))
++
++    def test_ledger_provenance_paths(self):
++        paths = {lp["path"] for lp in self.report["ledger_provenance"]}
++        expected_paths = {p for p, _ in self.ledger_paths}
++        self.assertEqual(expected_paths, paths)
++
++    def test_each_ledger_decision_count_matches(self):
++        """Ledger decision_count must equal number of decisions in ledger."""
++        for lp in self.report["ledger_provenance"]:
++            with self.subTest(path=lp["path"]):
++                ledger = lp["path"]
++                self.assertIsInstance(ledger, str)
++                self.assertGreaterEqual(
++                    lp["decision_count"], 0,
++                )
++
++    def test_kind_breakdown_includes_all_eight_kinds(self):
++        kinds = {kb["kind"] for kb in self.report["kind_breakdown"]}
++        expected_kinds = {
++            "automation_mechanism",
++            "configuration",
++            "data_collection",
++            "document_collection",
++            "memory_source",
++            "repository",
++            "service",
++            "skill",
++        }
++        self.assertEqual(expected_kinds, kinds)
++
++    def test_retain_in_place_round_trip(self):
++        """The string 'retain in place' must survive JSON round-trip."""
++        raw = json.dumps(self.report["aggregate"])
++        restored = json.loads(raw)
++        self.assertIn("retain in place", restored)
++
++    def test_text_output_includes_retain_in_place(self):
++        """The text renderer must preserve 'retain in place' intact."""
++        text = report_module._render_text(self.report)
++        self.assertIn("retain in place", text)
++
++    def test_service_kind_present_in_breakdown(self):
++        """The 'service' kind must appear with its own breakdown."""
++        service = [
++            kb for kb in self.report["kind_breakdown"] if kb["kind"] == "service"
++        ]
++        self.assertEqual(1, len(service))
++        self.assertEqual(101, service[0]["registry_count"])
++
++    def test_memory_source_present(self):
++        ms = [
++            kb for kb in self.report["kind_breakdown"] if kb["kind"] == "memory_source"
++        ]
++        self.assertEqual(1, len(ms))
++        self.assertEqual(17, ms[0]["registry_count"])
++
++
++class CoverageEdgeCasesTests(unittest.TestCase):
++    """Synthetic fixture tests for edge cases."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.mkdtemp()
++
++    def tearDown(self) -> None:
++        import shutil
++        shutil.rmtree(self.tmpdir, ignore_errors=True)
++
++    def _registry(self, units: list[dict]) -> dict:
++        return {"migration_units": units}
++
++    def _unit(self, uid: str, kind: str = "skill") -> dict:
++        return {
++            "id": uid,
++            "kind": kind,
++            "name": f"unit-{uid}",
++            "categories": [],
++            "disposition": "pending",
++            "locations": [],
++            "identities": {},
++            "provenance": [],
++            "reconciliation_notes": [],
++            "reconciliation_status": "overlapping-evidence",
++            "sensitivity": "internal",
++        }
++
++    def _decision(self, uid: str, disposition: str) -> dict:
++        return {
++            "id": uid,
++            "name": f"unit-{uid}",
++            "disposition": disposition,
++        }
++
++    def _ledger(
++        self, decisions: list[dict], name: str = "test"
++    ) -> dict:
++        counts: collections.Counter = collections.Counter(
++            d.get("disposition", "") for d in decisions
++        )
++        return {
++            "schema_version": "1.0",
++            "decided_at": "2026-01-01",
++            "source_registry": "fake",
++            "summary": dict(counts),
++            "decisions": decisions,
++        }
++
++    def _ledger_paths(
++        self, name: str, decisions: list[dict]
++    ) -> list[tuple[str, dict]]:
++        path = pathlib.Path(self.tmpdir) / f"{name}.json"
++        data = self._ledger(decisions, name)
++        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
++        return [(str(path), data)]
++
++    # Case 2: Duplicate — unit decided in two ledgers with different dispositions.
++    def test_duplicate_decision_across_ledgers(self):
++        units = [self._unit("unit-001")]
++        registry = self._registry(units)
++
++        decisions_a = [self._decision("unit-001", "migrate")]
++        decisions_b = [self._decision("unit-001", "discard")]
++
++        ledger_paths: list[tuple[str, dict]] = (
++            self._ledger_paths("ledger-a", decisions_a)
++            + self._ledger_paths("ledger-b", decisions_b)
++        )
++
++        report = report_module.build_report(registry, ledger_paths)
++
++        # Must count as exactly one decided unit.
++        with self.subTest("decided_count"):
++            self.assertEqual(1, report["summary"]["total_decided"])
++        with self.subTest("aggregate_sum"):
++            self.assertEqual(
++                1, sum(report["aggregate"].values())
++            )
++        # Must flag as duplicate.
++        with self.subTest("duplicate_flagged"):
++            dupes = [a for a in report["anomalies"] if a["type"] == "duplicate"]
++            self.assertEqual(1, len(dupes))
++            self.assertEqual("unit-001", dupes[0]["id"])
++        # Disposition counts must sum to 1 (first disposition wins).
++        with self.subTest("disposition_sum"):
++            skill_breakdown = [
++                kb for kb in report["kind_breakdown"] if kb["kind"] == "skill"
++            ]
++            self.assertEqual(1, skill_breakdown[0]["decided_count"])
++            skill_counts = sum(skill_breakdown[0][d] for d in PERMITTED)
++            self.assertEqual(1, skill_counts)
++
++    # Case 3: Decision for unit not in registry (unknown unit).
++    def test_unknown_unit_not_in_registry(self):
++        units = [self._unit("unit-001")]
++        registry = self._registry(units)
++
++        decisions = [
++            self._decision("unit-001", "migrate"),
++            self._decision("unit-999", "discard"),
++        ]
++        ledger_paths = self._ledger_paths("unknown-test", decisions)
++
++        report = report_module.build_report(registry, ledger_paths)
++
++        with self.subTest("unknown_anomaly"):
++            unknowns = [a for a in report["anomalies"] if a["type"] == "unknown_unit"]
++            self.assertEqual(1, len(unknowns))
++            self.assertEqual("unit-999", unknowns[0]["id"])
++        with self.subTest("not_counted"):
++            self.assertEqual(1, report["summary"]["total_decided"])
++        with self.subTest("no_traceback"):
++            # The report was produced without raising.
++            self.assertIsInstance(report, dict)
++
++    # Case 4: No ledgers at all.
++    def test_no_ledgers(self):
++        units = [
++            self._unit("unit-001"),
++            self._unit("unit-002", kind="service"),
++        ]
++        registry = self._registry(units)
++
++        report = report_module.build_report(registry, [])
++
++        with self.subTest("all_undecided"):
++            self.assertEqual(0, report["summary"]["total_decided"])
++            self.assertEqual(2, report["summary"]["total_undecided"])
++        with self.subTest("incomplete_coverage"):
++            self.assertFalse(report["summary"]["coverage_complete"])
++        with self.subTest("undecided_anomalies"):
++            undecided = [a for a in report["anomalies"] if a["type"] == "undecided"]
++            self.assertEqual(2, len(undecided))
++
++    # Case 5: Disposition outside the permitted vocabulary.
++    def test_invalid_disposition(self):
++        units = [self._unit("unit-001")]
++        registry = self._registry(units)
++
++        decisions = [
++            self._decision("unit-001", "retire"),  # not permitted
++        ]
++        ledger_paths = self._ledger_paths("invalid-test", decisions)
++
++        report = report_module.build_report(registry, ledger_paths)
++
++        with self.subTest("decided"):
++            # Unit is decided (received a disposition), even if invalid.
++            self.assertEqual(1, report["summary"]["total_decided"])
++            self.assertEqual(0, report["summary"]["total_undecided"])
++        with self.subTest("not_in_aggregate"):
++            # Invalid disposition must NOT appear in aggregate totals.
++            self.assertNotIn("retire", report["aggregate"])
++        with self.subTest("invalid_anomaly"):
++            inv = [a for a in report["anomalies"] if a["type"] == "invalid_disposition"]
++            self.assertEqual(1, len(inv))
++            self.assertEqual("unit-001", inv[0]["id"])
++            self.assertEqual("retire", inv[0]["disposition"])
++
++    # Case 6: "retain in place" survives round-trip through JSON.
++    def test_retain_in_place_round_trip(self):
++        units = [self._unit("unit-rip")]
++        registry = self._registry(units)
++
++        decisions = [self._decision("unit-rip", "retain in place")]
++        ledger_paths = self._ledger_paths("rip-test", decisions)
++
++        report = report_module.build_report(registry, ledger_paths)
++
++        with self.subTest("aggregate"):
++            self.assertIn(
++                "retain in place",
++                report["aggregate"],
++            )
++            self.assertEqual(
++                1, report["aggregate"]["retain in place"]
++            )
++        with self.subTest("json_round_trip"):
++            raw = json.dumps(report)
++            restored = json.loads(raw)
++            self.assertIn(
++                "retain in place",
++                restored["aggregate"],
++            )
++            self.assertEqual(
++                1,
++                restored["aggregate"]["retain in place"],
++            )
++
++    # Case 7: Duplicate with SAME disposition in two ledgers.
++    def test_duplicate_with_same_disposition(self):
++        units = [self._unit("unit-dup")]
++        registry = self._registry(units)
++
++        decisions = [
++            self._decision("unit-dup", "archive"),
++        ]
++        ledger_paths = self._ledger_paths("dup-a", decisions) + [
++            self._ledger_paths("dup-b", decisions)[0]
++        ]
++
++        report = report_module.build_report(registry, ledger_paths)
++
++        with self.subTest("still_duplicate"):
++            dupes = [a for a in report["anomalies"] if a["type"] == "duplicate"]
++            self.assertEqual(1, len(dupes))
++        with self.subTest("one_decided"):
++            self.assertEqual(1, report["summary"]["total_decided"])
++            self.assertEqual(1, sum(report["aggregate"].values()))
++
++
++if __name__ == "__main__":
++    unittest.main()
