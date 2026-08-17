@@ -143,3 +143,57 @@ calls says it did look.
 
 The permission needs a counterweight: require an empty result to say **what was checked and how**.
 An all-clear should have to be argued for, not merely declared.
+
+---
+
+## The variance arms — three reviewers, one diff
+
+`worker/f01-pi` reviewed three times by fresh instances. Identical input, identical prompt.
+607 s / 35 turns / 3 findings, 711 s / 30 turns / 3 findings, 714 s / 23 turns / 5 findings.
+
+| Finding | R1 | R2 | R3 | In answer key |
+| --- | :-: | :-: | :-: | --- |
+| **Traceback on malformed JSON** (`high`) | — | ✅ | ✅ | **defect 1** |
+| **Summary and per-kind counts contradict** (`medium`) | — | ✅ | — | **defect 2** |
+| `LEGEND` dead constant | ✅ | ✅ | ✅ | nit |
+| `test_each_ledger_decision_count_matches` vacuous | ✅ | — | ✅ | nit |
+| `disp_sum` unused | ✅ | — | ✅ | nit |
+
+**The single most important result in E7 is in that table.**
+
+Review 1 — the one I scored first and reported as "3 hits, all quality nits, no defects found" —
+**missed both defects that its two identical siblings found.** Judging the local reviewer from that
+run alone would have understated it badly.
+
+**Union of three: 2 of the 4 documented defects, plus 3 nits, still zero false positives.**
+Best single run: 2 defects. Worst single run: **zero**.
+
+### This inverts the design I proposed earlier
+
+I suggested majority voting — *"findings appearing in 2 of 3 reviews are probably real; ones
+appearing once are probably noise."*
+
+**That rule would have discarded the best finding in the entire experiment.** The summary/per-kind
+contradiction — the subtlest defect, the one requiring two parts of the report to be held against
+each other — was found by **exactly one** reviewer out of three.
+
+Majority voting suppresses precisely the rare-and-real. It is the right rule when false positives
+are the problem. Here they are not: **zero false positives across five reviews**. So the correct
+aggregation is the **union**, and the frequency count is worth keeping only as a display hint, never
+as a filter.
+
+### So: parallel union, not sequential rounds
+
+For the question of whether to iterate implement → review → fix → review:
+
+- **Sequential rounds are the wrong shape.** The variance is between *reviewers*, not between
+  *versions of the code*. A second round after a fix re-rolls the dice on a nearly identical diff —
+  it does not go deeper, it just samples again, while adding the oscillation risk of a fresh
+  reviewer undoing what the previous round's fix deliberately introduced.
+- **Parallel reviews of one diff sample the same distribution without any of that risk.** They all
+  see identical code, so they cannot fight each other.
+- **Three is enough to be worth it here** — it took the defect yield from 0 to 2. Whether five beats
+  three is unmeasured.
+
+Recommended shape: **N parallel reviews → union of findings → one fix pass → mechanical re-verify
+(tests plus the specific check each finding named), not a second full review.**
