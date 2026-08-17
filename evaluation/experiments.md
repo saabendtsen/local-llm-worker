@@ -354,6 +354,22 @@ not need `bash` (`--no-shell`, see `scripts/run_task.py`). Three benefits at onc
    wasted turns is right.
 4. Whether removing the shell hurts anything not anticipated.
 
+**Conflict with the `tdd` skill, to be resolved deliberately.** The Matt Pocock `tdd` skill
+mandates **one test per cycle** — *"One seam, one test, one minimal implementation per cycle"* —
+and names bulk-test-writing as the *horizontal slicing* anti-pattern: *"Bulk tests verify imagined
+behavior."* E4 as designed is one prove-it-fails gate over a task-sized batch of tests, which is
+closer to what the skill condemns.
+
+Two honest reconciliations: size each task so that one test *is* the task, which fits the existing
+task sizing; or keep the batch and accept that the enumerate-the-cases discipline substitutes for
+the incremental feedback the skill relies on. Pick one consciously rather than discovering the
+conflict mid-run.
+
+The skill also independently confirms E6's finding, in its own words: *"the assertion recomputes
+the expected value the way the code does… so it passes by construction and can never disagree with
+the code. Expected values must come from an independent source of truth."* Arrived at from a
+different direction, which is worth something.
+
 **Refinement from E2, recorded before E4 runs.** E2's tests *did* catch their traps, unlike E1's.
 The difference was not emphasis but form: E2's acceptance criteria **enumerated the exact inputs
 that must be rejected**, so the tests enumerate them too. E1's task *warned about a mistake to

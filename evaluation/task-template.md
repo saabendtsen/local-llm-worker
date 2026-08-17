@@ -1,9 +1,10 @@
 ---
 id: 0000-short-slug
-repo: C:\Dev\homelab\repos\some-repo
+repo: C:\Dev\homelab
 category: tests
 complexity: small
 verify: python -m pytest -q
+base: experiment/74-local-llm-worker
 branch: worker/0000-short-slug
 ---
 
@@ -11,10 +12,18 @@ branch: worker/0000-short-slug
 Written by Claude, executed by the local worker, scored by Claude.
 
 Everything below the frontmatter is sent to the worker verbatim as its prompt.
-Describe the outcome and its boundaries. Do NOT list the edits to make -- the
-worker determines those. Prescribing the changes defeats the purpose: if the
-plan already contains every edit, the reasoning cost has been paid and the
-delegation measured nothing.
+
+STRUCTURE borrowed from the Matt Pocock `triage` skill's AGENT-BRIEF template
+(Current behavior / Desired behavior / Key interfaces / Out of scope) and from
+`to-spec` step 2 (declare the seams under test). Its own justification fits this
+setup exactly: "The original body and discussion are context — the agent brief
+is the contract."
+
+ONE PRINCIPLE OF THAT TEMPLATE IS DELIBERATELY REJECTED. It insists on avoiding
+file paths and line numbers because a brief "may sit in ready-for-agent for days
+or weeks" and they go stale. Our tasks are written and executed minutes apart,
+and E1 measured the opposite: naming the file and the offending line cut effort
+to a third for the same correctness. Name them.
 
 Frontmatter fields:
   id         unique; also names the run directory under evaluation/runs/
@@ -23,50 +32,76 @@ Frontmatter fields:
              | refactor | bugfix
   complexity rough size: small | medium
   verify     the acceptance command; its exit code decides pass/fail
+  base       strongly recommended: the branch to start from. Without it the run
+             branches from whatever is checked out, which has twice meant
+             silently inheriting an earlier run's work and measuring nothing.
   branch     optional; defaults to worker/<id>
-  base       optional but strongly recommended: the branch to start from.
-             Without it the run branches from whatever is checked out, which
-             has twice meant silently inheriting an earlier run's work and
-             measuring nothing. Set it whenever the run is a measurement.
 -->
 
 # Task: <short title>
 
-<One paragraph. What should be true when this is done.>
+**<One sentence: what should be true when this is done.>**
 
-## Constraints
+## Current behavior
 
-- <What must not change: public APIs, file formats, save compatibility, behaviour>
-- <Scope boundaries: which directories are in play>
+<What happens now. Quote the offending code with its path and line if it is short —
+see the note above about deliberately naming paths.>
+
+## Desired behavior
+
+<What should happen instead, including edge cases and error conditions. Behavioural,
+not procedural: describe the outcome, not the sequence of edits.>
+
+## Key interfaces
+
+<Named types, function signatures, config shapes and invariants the worker should
+know about. This is the cheap scaffolding that E1 showed buys speed for free — it
+saves the worker rediscovering what you already know.>
+
+- `<name>` — <shape, or the invariant it must preserve>
+
+## Seams under test
+
+<REQUIRED. Borrowed from `to-spec`: name the layers a test must exercise, highest
+seam first, and mark any that are mandatory.
+
+This exists because of E6: three independent implementations all put the logic in
+a clean pure function as asked, all left the command-line entry point untested,
+and all three shipped the same error-path defect as a result. A reminder in a
+comment did not prevent it; a declared field does.>
+
+- `<entry point>` — <argv parsing, exit codes, stderr on bad input>  [REQUIRED]
+- `<pure function>` — <the happy path and its edge cases>
+
+## Cases the tests must cover
+
+<REQUIRED, and the highest-value section here. No external skill supplies it.
+
+Enumerate the cases. E2 versus E1 showed that listing the exact inputs a test must
+handle produces tests that discriminate, while warning about a mistake to avoid
+produces an implementation that dodges the mistake and a test that misses it.
+
+Name the SOURCE OF TRUTH for each assertion. E6 showed all three implementations
+writing self-consistency checks — assertions any internally coherent wrong answer
+satisfies — when the task did not say what to pin them to. The truth must come
+from outside the code: a known-good literal, a worked example, a value the
+codebase already publishes.>
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| <concrete input> | <the literal, file, or published value it must equal> |
+
+## Out of scope
+
+- <What must not change: public APIs, file formats, behaviour, other files>
 
 ## Acceptance criteria
 
-- <Verifiable statement>
-- <Relevant tests are added>
-- `<the verify command>` passes
-- Return a concise summary of what was modified and anything left unresolved.
-
-<!--
-Two things learned from E6, where three independent implementations shared the
-same two blind spots. Add them to the criteria whenever they apply.
-
-1. NAME THE SOURCE OF TRUTH each assertion must be pinned to. "Cover the
-   per-kind breakdown" produced self-consistency checks in all three arms --
-   assertions that any internally coherent wrong answer satisfies. "Assert the
-   per-kind counts equal registry["summary"]["by_kind"]" would have produced a
-   real check. Tests written after working code verify that the code agrees
-   with itself unless an external truth is named.
-
-2. ASK FOR THE ENTRY POINT TO BE TESTED. All three arms put the logic in a
-   clean pure function as asked, and none tested main(). All three then shipped
-   error-path defects -- tracebacks on malformed input, in violation of a stated
-   constraint. If the command line is a deliverable, say that its argument
-   parsing, exit codes, and error messages must be covered.
--->
-
+- [ ] <Verifiable statement>
+- [ ] `<the verify command>` passes — the whole suite, not only the new tests
+- [ ] Return a concise summary of what was modified and anything left unresolved.
 
 ## Notes
 
-<Anything already known that would otherwise cost the worker a long detour:
-the pattern to follow, an existing design doc, a known gotcha. This is cheap to
-supply and is the difference between a bounded task and an open-ended one.>
+<Anything already known that would otherwise cost a long detour: the pattern to
+follow, an existing design doc, a known gotcha, the test module's fixture style.>
