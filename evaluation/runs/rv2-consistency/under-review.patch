@@ -1,0 +1,510 @@
+diff --git a/scripts/wayfinder_autopilot.py b/scripts/wayfinder_autopilot.py
+index 3a3a9e6..5a30d3c 100644
+--- a/scripts/wayfinder_autopilot.py
++++ b/scripts/wayfinder_autopilot.py
+@@ -25,6 +25,8 @@ TASK_NAME = "Codex Wayfinder Autopilot"
+ TASK_XML_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+ SCHEDULER_CLEANUP_GRACE_SECONDS = 300
+ QUEUE_SCOPE_PATTERN = re.compile(r"^(?:user|org):[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
++HISTORY_RUNS_DIR = "runs"
++HISTORY_STATE_OK = "ok"
+ 
+ 
+ @dataclass
+@@ -828,9 +830,82 @@ def build_parser() -> argparse.ArgumentParser:
+     subparsers.add_parser("install")
+     subparsers.add_parser("status")
+     subparsers.add_parser("uninstall")
++    history_parser = subparsers.add_parser("history")
++    history_parser.add_argument("--limit", type=int, default=None)
++    history_parser.add_argument("--state", action="append", default=None)
+     return parser
+ 
+ 
++def list_runs(config: AutopilotConfig, *, limit: int | None = None, states: list[str] | None = None) -> dict:
++    runs_dir = config.log_dir / HISTORY_RUNS_DIR
++    entries: list[dict] = []
++    if runs_dir.is_dir():
++        for child in runs_dir.iterdir():
++            if not child.is_dir():
++                continue
++            metadata_path = child / "run.json"
++            try:
++                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
++            except (json.JSONDecodeError, OSError):
++                entries.append({
++                    "run_id": child.name,
++                    "state": "unreadable",
++                    "dry_run": None,
++                    "started_at": None,
++                    "finished_at": None,
++                    "duration_seconds": None,
++                    "exit_code": None,
++                    "error": "failed to parse run.json",
++                    "events": None,
++                    "stderr": None,
++                    "final_message": None,
++                    "metadata": str(metadata_path),
++                })
++                continue
++            started = metadata.get("started_at")
++            finished = metadata.get("finished_at")
++            duration: float | None = None
++            if started and finished:
++                try:
++                    start_dt = datetime.fromisoformat(started)
++                    finish_dt = datetime.fromisoformat(finished)
++                    duration = round((finish_dt - start_dt).total_seconds(), 3)
++                except (ValueError, TypeError):
++                    pass
++            is_abandoned = False
++            if metadata.get("state") == "running" and started:
++                try:
++                    start_dt = datetime.fromisoformat(started)
++                    elapsed = (datetime.now().astimezone() - start_dt).total_seconds()
++                    if elapsed > SCHEDULER_CLEANUP_GRACE_SECONDS:
++                        is_abandoned = True
++                except (ValueError, TypeError):
++                    pass
++            entry = {
++                "run_id": metadata.get("run_id", child.name),
++                "state": metadata.get("state", "unknown"),
++                "dry_run": metadata.get("dry_run"),
++                "started_at": started,
++                "finished_at": finished,
++                "duration_seconds": duration,
++                "exit_code": metadata.get("exit_code"),
++                "error": metadata.get("error"),
++                "abandoned": is_abandoned,
++                "events": child.joinpath("events.jsonl") if (child / "events.jsonl").is_file() else None,
++                "stderr": child.joinpath("stderr.log") if (child / "stderr.log").is_file() else None,
++                "final_message": child.joinpath("final.md") if (child / "final.md").is_file() else None,
++                "metadata": str(metadata_path),
++            }
++            entries.append(entry)
++    # run_id is fixed-width timestamp, so lexicographic reverse == newest first
++    entries.sort(key=lambda e: e["run_id"], reverse=True)
++    if states:
++        entries = [e for e in entries if e["state"] in states]
++    if limit is not None:
++        entries = entries[:limit]
++    return {"state": HISTORY_STATE_OK, "runs": entries}
++
++
+ def main() -> int:
+     args = build_parser().parse_args()
+     try:
+@@ -849,6 +924,9 @@ def main() -> int:
+             result = task_status()
+             result["log_dir"] = str(config.log_dir)
+             result["skill"] = str(skill_destination)
++        elif args.command == "history":
++            states = sorted(args.state) if args.state else None
++            result = list_runs(config, limit=args.limit, states=states)
+         else:
+             result = remove(skill_destination, skills_root)
+         print(json.dumps(result, indent=2))
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index 44b7e5e..f401c50 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -1,5 +1,6 @@
+ import json
+ from pathlib import Path
++import subprocess
+ import sys
+ import tempfile
+ import unittest
+@@ -25,6 +26,7 @@ from wayfinder_autopilot import (  # noqa: E402
+     require_upstream_skill_files,
+     route_skill_names,
+     select_snapshot_route,
++    list_runs,
+ )
+ 
+ 
+@@ -512,6 +514,251 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+             check=False,
+         )
+ 
++    def test_list_runs_returns_empty_when_no_runs_dir(self):
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual([], result["runs"])
++
++    def test_list_runs_ignores_non_directory_entries_in_runs(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        (runs_dir / "notes.txt").write_text("ignore me", encoding="utf-8")
++        run_dir = runs_dir / "20260816T120000-000000"
++        run_dir.mkdir()
++        (run_dir / "run.json").write_text(
++            json.dumps({"run_id": "20260816T120000-000000", "state": "completed"}),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("completed", result["runs"][0]["state"])
++
++    def test_list_runs_ordering_is_newest_first_by_run_id(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id in ("20260816T120000-000000", "20260818T120000-000000", "20260817T120000-000000"):
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": "completed"}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config)
++        ids = [r["run_id"] for r in result["runs"]]
++        self.assertEqual(
++            ["20260818T120000-000000", "20260817T120000-000000", "20260816T120000-000000"],
++            ids,
++        )
++
++    def test_list_runs_with_limit(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id in ("20260816T120000-000000", "20260817T120000-000000", "20260818T120000-000000"):
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": "completed"}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config, limit=1)
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("20260818T120000-000000", result["runs"][0]["run_id"])
++
++    def test_list_runs_filters_by_state(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id, state in [
++            ("20260816T120000-000000", "completed"),
++            ("20260817T120000-000000", "failed"),
++            ("20260818T120000-000000", "completed"),
++        ]:
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": state}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config, states=["failed"])
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("failed", result["runs"][0]["state"])
++        result_multi = list_runs(self.config, states=["completed", "failed"])
++        self.assertEqual(3, len(result_multi["runs"]))
++
++    def test_list_runs_computes_duration_for_completed_run(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T155503-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "started_at": "2026-08-16T15:55:03.540718+02:00",
++                "finished_at": "2026-08-16T15:55:07.041543+02:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertAlmostEqual(3.501, entry["duration_seconds"], places=2)
++
++    def test_list_runs_computes_duration_across_utc_offset_change(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20261025T023000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "started_at": "2026-10-25T02:30:00+02:00",
++                "finished_at": "2026-10-25T02:30:05+01:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertAlmostEqual(3605.0, entry["duration_seconds"], places=1)
++
++    def test_list_runs_running_run_has_none_duration(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "running",
++                "started_at": "2026-08-16T15:55:03+02:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertEqual("running", entry["state"])
++        self.assertIsNone(entry["duration_seconds"])
++        self.assertIsNone(entry["finished_at"])
++
++    def test_list_runs_handles_truncated_run_json(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            '{"run_id": "x", "state": "run',
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        entry = result["runs"][0]
++        self.assertEqual("unreadable", entry["state"])
++        self.assertEqual("failed to parse run.json", entry["error"])
++
++    def test_list_runs_reports_artifact_paths(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({"run_id": run_id, "state": "completed"}),
++            encoding="utf-8",
++        )
++        (rd / "events.jsonl").write_text("", encoding="utf-8")
++        (rd / "stderr.log").write_text("", encoding="utf-8")
++        (rd / "final.md").write_text("done", encoding="utf-8")
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertEqual(str(rd / "events.jsonl"), str(entry["events"]))
++        self.assertEqual(str(rd / "stderr.log"), str(entry["stderr"]))
++        self.assertEqual(str(rd / "final.md"), str(entry["final_message"]))
++
++    def test_list_runs_missing_artifacts_are_none(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({"run_id": run_id, "state": "failed"}),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertIsNone(entry["events"])
++        self.assertIsNone(entry["stderr"])
++        self.assertIsNone(entry["final_message"])
++
++    def test_list_runs_round_trip_with_run_once(self):
++        fake = self.root / "fake_codex.py"
++        fake.write_text(
++            """
++from pathlib import Path
++import sys
++args = sys.argv[1:]
++Path(args[args.index('-o') + 1]).write_text('done', encoding='utf-8')
++""".strip(),
++            encoding="utf-8",
++        )
++        self.config.codex_command = [sys.executable, str(fake)]
++
++        run_once(
++            self.config,
++            dry_run=True,
++            token_provider=lambda: "test-token",
++            snapshot_provider=lambda config, token: {"data": {"queue": []}},
++        )
++
++        history = list_runs(self.config)
++        self.assertEqual("ok", history["state"])
++        self.assertEqual(1, len(history["runs"]))
++        entry = history["runs"][0]
++        self.assertRegex(entry["run_id"], r"^\d{8}T\d{6}-\d+")
++        self.assertEqual("completed", entry["state"])
++        self.assertTrue(entry["dry_run"])
++        self.assertIsNotNone(entry["started_at"])
++        self.assertIsNotNone(entry["finished_at"])
++        self.assertIsNotNone(entry["duration_seconds"])
++        self.assertEqual(0, entry["exit_code"])
++        self.assertIsNotNone(entry["metadata"])
++
++    def test_list_runs_all_required_keys_present(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "dry_run": True,
++                "started_at": "2026-08-16T15:55:03+02:00",
++                "finished_at": "2026-08-16T15:55:07+02:00",
++                "exit_code": 0,
++                "workspace": "/fake/workspace",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        required_keys = {
++            "run_id", "state", "dry_run", "started_at", "finished_at",
++            "duration_seconds", "exit_code", "error",
++            "events", "stderr", "final_message", "metadata", "abandoned",
++        }
++        self.assertTrue(required_keys.issubset(entry.keys()))
++        self.assertEqual(run_id, entry["run_id"])
++        self.assertEqual("completed", entry["state"])
++        self.assertTrue(entry["dry_run"])
++        self.assertEqual(0, entry["exit_code"])
++
+ 
+ def subprocess_result(returncode, stdout="", stderr=""):
+     class Result:
+@@ -573,5 +820,132 @@ def issue_summary(issue):
+     }
+ 
+ 
++def _run_wayfinder_cli(args: list[str], workspace: Path) -> subprocess.CompletedProcess:
++    return subprocess.run(
++        [sys.executable, str(ROOT / "scripts" / "wayfinder_autopilot.py"),
++         "--workspace", str(workspace)] + args,
++        capture_output=True, text=True, check=False,
++    )
++
++
++class HistoryCLIIntegrationTests(unittest.TestCase):
++    """End-to-end CLI tests via subprocess."""
++
++    def setUp(self):
++        self.temporary = tempfile.TemporaryDirectory()
++        self.root = Path(self.temporary.name)
++        self.workspace = self.root / "workspace"
++        self.workspace.mkdir()
++        # Minimal autopilot config
++        (self.workspace / "config").mkdir()
++        (self.workspace / "config" / "wayfinder-autopilot.json").write_text(
++            json.dumps({
++                "queue_scopes": ["user:example"],
++                "control_repository": "example/workspace",
++                "log_dir": "logs",
++                "codex_command": ["codex.cmd"],
++                "trusted_repository_roots": ["repos"],
++            }),
++            encoding="utf-8",
++        )
++        # Build a runs tree with three runs
++        self.runs_dir = self.workspace / "logs" / "runs"
++        self.runs_dir.mkdir(parents=True)
++        for run_id in (
++            "20260816T120000-000000",
++            "20260817T120000-000000",
++            "20260818T120000-000000",
++        ):
++            rd = self.runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({
++                    "run_id": run_id,
++                    "state": "completed",
++                    "dry_run": False,
++                    "started_at": "2026-08-16T15:55:03+02:00",
++                    "finished_at": "2026-08-16T15:55:07+02:00",
++                    "exit_code": 0,
++                    "workspace": str(self.workspace),
++                }),
++                encoding="utf-8",
++            )
++            # Add a stray non-directory file
++        (self.runs_dir / "notes.txt").write_text("ignore", encoding="utf-8")
++
++    def tearDown(self):
++        self.temporary.cleanup()
++
++    def test_cli_history_ok(self):
++        proc = _run_wayfinder_cli(["history"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual("ok", data["state"])
++        self.assertEqual(3, len(data["runs"]))
++
++    def test_cli_history_limit(self):
++        proc = _run_wayfinder_cli(["history", "--limit", "1"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual(1, len(data["runs"]))
++        self.assertEqual("20260818T120000-000000", data["runs"][0]["run_id"])
++
++    def test_cli_history_state_filter(self):
++        # Add a failed run
++        rd = self.runs_dir / "20260819T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": "20260819T120000-000000",
++                "state": "failed",
++                "dry_run": False,
++                "started_at": "2026-08-16T15:55:03+02:00",
++                "finished_at": "2026-08-16T15:55:07+02:00",
++                "exit_code": 1,
++                "workspace": str(self.workspace),
++            }),
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history", "--state", "failed"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual(1, len(data["runs"]))
++        self.assertEqual("failed", data["runs"][0]["state"])
++
++    def test_cli_history_no_runs_directory(self):
++        # Create workspace without logs/runs
++        workspace = self.root / "clean"
++        workspace.mkdir()
++        (workspace / "config").mkdir()
++        (workspace / "config" / "wayfinder-autopilot.json").write_text(
++            json.dumps({
++                "queue_scopes": ["user:example"],
++                "control_repository": "example/workspace",
++                "log_dir": "logs",
++                "codex_command": ["codex.cmd"],
++                "trusted_repository_roots": ["repos"],
++            }),
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history"], workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual("ok", data["state"])
++        self.assertEqual([], data["runs"])
++
++    def test_cli_history_truncated_run_json(self):
++        rd = self.runs_dir / "20260820T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            '{"run_id": "x", "state": "run',
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        states = {r["state"] for r in data["runs"]}
++        self.assertIn("unreadable", states)
++
++
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,164 @@
+{
+  "reviews_read": [
+    "evaluation\\runs\\rv2-errors",
+    "evaluation\\runs\\rv2-consistency",
+    "evaluation\\runs\\rv2-tests",
+    "evaluation\\runs\\rv2-coverage"
+  ],
+  "findings_parsed": 11,
+  "findings_after_filters": 11,
+  "findings_after_dedupe": 11,
+  "findings": [
+    {
+      "source": "rv2-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/wayfinder_autopilot.py, `list_runs()` read-only behaviour",
+      "severity": "high",
+      "confidence": "verified",
+      "requirement": "\"history is strictly read-only: it must not create the log directory, must not acquire RunLock, and must not write anywhere.\"",
+      "gap": "The test `test_cli_history_no_runs_directory` verifies `{\"state\": \"ok\", \"runs\": []}` and exit 0, but does not assert that no filesystem state was created. I injected `runs_dir.mkdir(parents=True, exist_ok=True)` into `list_runs`. The test still passed because it only checks the JSON payload, not the filesystem. This means any accidental write in `list_runs` would silently pass the suite.",
+      "proof": "Added `runs_dir.mkdir(parents=True, exist_ok=True)` before the `is_dir()` guard in `list_runs`. Ran `test_cli_history_no_runs_directory` \u2014 test passed. Ran `test_list_runs_returns_empty_when_no_runs_dir` \u2014 also passed. Both tests check only the returned dict, never the filesystem. Restored original function.",
+      "found_by": [
+        "rv2-coverage"
+      ]
+    },
+    {
+      "source": "rv2-consistency",
+      "axis": "consistency",
+      "file": "scripts/wayfinder_autopilot.py:498-509",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "unreadable-run entries omit the `\"abandoned\"` key that every normal entry includes",
+      "why": "The normal entry dict (line ~525) sets `\"abandoned\": is_abandoned`. The unreadable-entry dict (line ~498-509), built inside the `except (json.JSONDecodeError, OSError)` handler, has no `\"abandoned\"` key. A consumer iterating over `result[\"runs\"]` that contains both valid and unreadable entries cannot safely access `entry[\"abandoned\"]` without a `KeyError` guard. The test `test_list_runs_all_required_keys_present` asserts `abandoned` is a required key but only exercises the valid-entry path, so the gap goes uncaught.",
+      "repro": "Place a truncated `run.json` (e.g. `{\"run_id\": \"x\", \"state\": \"run`) in a `runs/` directory and call `list_runs()`. The resulting entry dict will lack the `\"abandoned\"` key while all other entries contain it.",
+      "evidence": "Normal entry keys include `\"abandoned\"`; unreadable entry keys do not. Verified by extracting both dicts from the source and computing set difference: `{'abandoned'}`.",
+      "found_by": [
+        "rv2-consistency"
+      ]
+    },
+    {
+      "source": "rv2-errors",
+      "axis": "error-paths",
+      "file": "scripts/wayfinder_autopilot.py:865",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "`list_runs` crashes with unhandled `AttributeError` when `run.json` contains valid JSON that is not a dict.",
+      "why": "The code parses `run.json` with `json.loads()` then immediately calls `metadata.get(\"started_at\")`. When the JSON is a list, string, number, boolean, or `null`, this raises `AttributeError`, which is not caught by the existing `except (json.JSONDecodeError, OSError)` block. The traceback reaches the user and the process exits with code 1 instead of reporting the unreadable run.",
+      "repro": "`python scripts/wayfinder_autopilot.py --workspace <workspace> history` where `<workspace>/logs/runs/20260816T120000-000000/run.json` contains `[1, 2, 3]",
+      "evidence": "Traceback (most recent call last): File \".../wayfinder_autopilot.py\", line 940, in <module> raise SystemExit(main()) File \".../wayfinder_autopilot.py\", line 929, in main result = list_runs(config, limit=args.limit, states=states) File \".../wayfinder_autopilot.py\", line 865, in list_runs started = metadata.get(\"started_at\") ^^^^^^^^^^^^ AttributeError: 'list' object has no attribute 'get' EXIT: 1 (Same traceback for JSON string, `null`, `42`, `true`, `false`.)",
+      "found_by": [
+        "rv2-errors"
+      ]
+    },
+    {
+      "source": "rv2-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/wayfinder_autopilot.py, `main()` history branch (`sorted(args.state)`) and `list_runs()` filter+limit ordering",
+      "severity": "medium",
+      "confidence": "verified",
+      "requirement": "\"--state filters by run state and is repeatable; it applies before --limit.\"",
+      "gap": "No test exercises `--state` and `--limit` together. The spec requires state filtering to happen before the limit slice, but the only tests pass each flag in isolation. When I swapped the order (limit before filter) and ran `--state failed --limit 1` against 4 runs (2 completed, 2 failed), the broken code returned 0 runs instead of the newest failed run (`20260819T...`). The suite still passed because no single-flag test depends on ordering.",
+      "proof": "Replaced `if states: ...; if limit is not None: ...` with `if limit is not None: ...; if states: ...` in `list_runs`. Ran `--state failed --limit 1` against a workspace with 3 completed + 1 failed run \u2192 stdout returned `{\"state\":\"ok\",\"runs\":[]}` (zero entries after limit consumed a non-failed run, then filter removed it). Restored original order.",
+      "found_by": [
+        "rv2-coverage"
+      ]
+    },
+    {
+      "source": "rv2-tests",
+      "axis": "test-strength",
+      "file": "scripts/wayfinder_autopilot.py:838",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "--state uses nargs=\"*\" instead of action=\"append\", breaking repeated --state flags",
+      "mutation": "Changed history_parser.add_argument(\"--state\", action=\"append\", default=None) to nargs=\"*\"",
+      "result": "42 passed",
+      "why": "With action=\"append\", --state A --state B produces [\"A\", \"B\"]. With nargs=\"*\", it produces [\"A\", \"--state\", \"B\"]. The \"--state\" literal enters the filter list as noise. The spec says --state is repeatable. No test exercises repeated --state flags. SUMMARY: test-strength=4 blocking=2 mutations-run=4 restored=yes",
+      "found_by": [
+        "rv2-tests"
+      ]
+    },
+    {
+      "source": "rv2-errors",
+      "axis": "error-paths",
+      "file": "scripts/wayfinder_autopilot.py:901",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "`list_runs` crashes with `TypeError` during sort when run entries have mixed `run_id` types.",
+      "why": "The sort key is `e[\"run_id\"]`. Valid entries may have a numeric `run_id` from the JSON, while unreadable entries use `child.name` (a string) as the fallback. Python 3 cannot compare `int` and `str`, so `entries.sort(...)` raises `TypeError`, which escapes to the user.",
+      "repro": "`python scripts/wayfinder_autopilot.py --workspace <workspace> history` where one run dir has `run.json` containing `{\"run_id\": 123, \"state\": \"completed\"}` and another has `run.json` containing `NOT JSON",
+      "evidence": "Traceback (most recent call last): File \".../wayfinder_autopilot.py\", line 940, in <module> raise SystemExit(main()) File \".../wayfinder_autopilot.py\", line 929, in main result = list_runs(config, limit=args.limit, states=states) File \".../wayfinder_autopilot.py\", line 901, in list_runs entries.sort(key=lambda e: e[\"run_id\"], reverse=True) ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TypeError: '<' not supported between instances of 'int' and 'str' EXIT: 1 SUMMARY: error-paths=2 blocking=2 cases-tested=8",
+      "found_by": [
+        "rv2-errors"
+      ]
+    },
+    {
+      "source": "rv2-tests",
+      "axis": "test-strength",
+      "file": "tests/test_wayfinder_autopilot.py:570-584",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "test_list_runs_filters_by_state does not test limit+states interaction",
+      "mutation": "Swapped the order of state filter and limit slice in list_runs (limit applied before state filter instead of after)",
+      "result": "42 passed",
+      "why": "When --limit and --state are combined, applying limit before filtering produces wrong results. E.g., --limit 2 --state completed over 3 completed + 1 failed run gives 2 completed runs with correct order, but only 1 with swapped order. No test exercises both flags together.",
+      "found_by": [
+        "rv2-tests"
+      ]
+    },
+    {
+      "source": "rv2-tests",
+      "axis": "test-strength",
+      "file": "tests/test_wayfinder_autopilot.py:586-606",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "test_list_runs_computes_duration_for_completed_run uses places=2 which is too lenient for the 3.501 assertion",
+      "mutation": "Changed round((finish_dt - start_dt).total_seconds(), 3) to round(..., 2)",
+      "result": "42 passed",
+      "why": "Rounding to 2dp gives 3.5 instead of 3.501. The assertAlmostEqual with places=2 accepts differences < 0.005, so 0.001 passes silently. The test should use places=3 to enforce the 3-decimal precision the spec requires.",
+      "found_by": [
+        "rv2-tests"
+      ]
+    },
+    {
+      "source": "rv2-tests",
+      "axis": "test-strength",
+      "file": "tests/test_wayfinder_autopilot.py:717-760",
+      "severity": "low",
+      "confidence": "verified",
+      "problem": "test_list_runs_all_required_keys_present does not assert on duration_seconds value",
+      "mutation": "Changed round((finish_dt - start_dt).total_seconds(), 3) to duration = 99999.0",
+      "result": "1 passed (the key-presence test itself passed; the two dedicated duration tests failed as expected)",
+      "why": "This test validates that all required keys are present and checks run_id/state/dry_run/exit_code, but duration_seconds is only checked for key presence, not value. A broken duration calculation that still produces a non-None float would slip past this test. Other tests catch the bug, but this specific test provides no discrimination on duration.",
+      "found_by": [
+        "rv2-tests"
+      ]
+    },
+    {
+      "source": "rv2-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/wayfinder_autopilot.py, `list_runs()` abandoned-run branch",
+      "severity": "low",
+      "confidence": "suspected",
+      "requirement": "\"whether a long-running run is flagged as abandoned using the module's existing `timeout_seconds` and `SCHEDULER_CLEANUP_GRACE_SECONDS`\" (deliberately left to implementor, but code implements it)",
+      "gap": "The `abandoned` flag is computed in `list_runs` when a run's state is `\"running\"` and elapsed time exceeds `SCHEDULER_CLEANUP_GRACE_SECONDS` (300s). No test uses a `started_at` timestamp more than 300 seconds in the past with `state: \"running\"`. The existing `test_list_runs_running_run_has_none_duration` uses a future timestamp, so `is_abandoned` is always `False` in tests and the `abandoned: True` branch is untested.",
+      "proof": "Not broken (abandoned check depends on real wall-clock time; a break would require mocking `datetime.now`). SUMMARY: missing-coverage=3 blocking=0 requirements-listed=19 requirements-uncovered=3 restored=yes",
+      "found_by": [
+        "rv2-coverage"
+      ]
+    },
+    {
+      "source": "rv2-consistency",
+      "axis": "consistency",
+      "file": "scripts/wayfinder_autopilot.py:472",
+      "severity": "low",
+      "confidence": "suspected",
+      "problem": "`duration_seconds` rounding to 3 decimal places produces variable JSON decimal precision (3.501 vs 3605.0)",
+      "why": "The code uses `round(value, 3)`. When the rounded value is exact (e.g. 3605.0), Python serialises it as `3605.0` (one decimal) rather than `3605.000` (three decimals). Consumers expecting a consistent decimal width in the JSON output would see an unexpected format. This is not a logic error\u2014the values themselves are correct\u2014but it breaks the implicit contract that rounding to N places yields N decimals.",
+      "repro": "Run `list_runs()` on a fixture with `started_at: \"2026-10-25T02:30:00+02:00\"`, `finished_at: \"2026-10-25T02:30:05+01:00\"`. The JSON output will contain `\"duration_seconds\": 3605.0` instead of `3605.000`.",
+      "evidence": "`json.dumps(round(3.500825, 3))` \u2192 `\"3.501\"`; `json.dumps(round(3605.0, 3))` \u2192 `\"3605.0\"`. SUMMARY: consistency=2 blocking=0 relations-checked=6",
+      "found_by": [
+        "rv2-consistency"
+      ]
+    }
+  ]
+}
