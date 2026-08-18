@@ -1,0 +1,32 @@
+{
+  "review_id": "rvf-consistency",
+  "recorded_at": "2026-08-17T21:14:47+00:00",
+  "branch": "worker/f01-pi",
+  "base": "experiment/74-local-llm-worker",
+  "spec": "evaluation\\tasks\\f01-migration-coverage-report.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 985.1,
+  "timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 25,
+    "tool_calls": 27,
+    "tools_used": {
+      "bash": 18,
+      "edit": 4,
+      "write": 3,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 11938,
+    "received_chars": 11938,
+    "reason": null
+  },
+  "reviewer_modified_worktree": false,
+  "stderr_tail": ""
+}

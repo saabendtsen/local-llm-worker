@@ -197,3 +197,75 @@ For the question of whether to iterate implement → review → fix → review:
 
 Recommended shape: **N parallel reviews → union of findings → one fix pass → mechanical re-verify
 (tests plus the specific check each finding named), not a second full review.**
+
+---
+
+## Focused reviewers — one axis each, same diff (`worker/f01-pi`)
+
+Three narrow reviewers replacing the one broad reviewer. Same diff the three generic reviews saw,
+so the comparison is direct.
+
+| Reviewer | Time | Findings | Honesty counter |
+| --- | --- | --- | --- |
+| error-paths | 519.9 s | **10** | `cases-tested=15` |
+| consistency | 985.1 s | 1 | `relations-checked=11` |
+| test-strength | 820.0 s | 4 | `mutations-run=7 restored=yes` |
+
+**14 findings against the generic reviewers' union of 5.**
+
+### Against the answer key
+
+| Frontier finding | Generic union | Focused union |
+| --- | :-: | :-: |
+| **D1** traceback on malformed JSON | ✅ | ✅ (plus 5 wrong-shape variants) |
+| **D2** summary and per-kind counts contradict | ✅ (1 of 3 reviewers) | ✅ |
+| **D3** no de-duplication of ledger sources | ❌ | ❌ |
+| **D4** `main()` never tested | ❌ | ❌ |
+| N6 `test_per_kind_decided_plus_undecided` tautological | ❌ | ✅ **proven by mutation** |
+| N7 `test_each_ledger_decision_count_matches` vacuous | ✅ | ✅ **proven by mutation** |
+| N8 `disp_sum` dead | ✅ | ❌ |
+| N9 `LEGEND` dead | ✅ | ❌ |
+
+Both unions get 2 of the 4 headline defects. The difference is everything else.
+
+### What focus bought
+
+**Depth on the assigned axis, far past the answer key.** The error-paths reviewer constructed and
+ran 15 bad-input cases and found seven error-path defects the frontier reviewer never reported —
+`migration_units: null`, `migration_units` as a string, `decisions` as a string, `--output` into a
+missing directory, units missing `id` or `kind`. All with repro commands.
+
+**Proof where the frontier reviewer had only an argument.** The frontier review *asserted* that
+`test_per_kind_decided_plus_undecided` was tautological. The test-strength reviewer **proved it**:
+it deleted the disposition-counting loop entirely, and all eight kinds still passed. It ran seven
+mutations, recorded each result, and restored the file — confirmed by `git status`.
+
+That is the frontier reviewers' own method, executed by the local model, unsupervised.
+
+**The contradiction axis worked exactly as designed.** One finding, but the *right* one, after
+checking eleven relations. Every generic reviewer but one missed D2; the specialist went straight
+to it, because "compute the same quantity two ways and compare" is a procedure rather than an
+insight.
+
+### What focus cost
+
+**Breadth.** The focused set missed `disp_sum` and `LEGEND` — trivial dead code the generic
+reviewers caught easily. Nobody was assigned to notice them. A cheap fourth axis (dead code, unused
+imports, naming) would close that, or a linter would, which is the better answer.
+
+**D4 is the instructive miss.** `main()` has no test at all, and the test-strength prompt explicitly
+lists *"Spec-required behaviour with no test at all"* as a finding class. The reviewer still spent
+all seven mutations on tests that **exist**. Mutating what is there is concrete and mechanical;
+noticing what is absent requires comparing the spec's required cases against the test file and
+finding the gap. **Asking for both in one prompt got only the mechanical one.** If missing coverage
+matters, it needs its own reviewer.
+
+### Verdict on E7
+
+Focused reviewers are clearly better than a broad one, and the honesty counters worked — no
+reviewer claimed an all-clear, and the test-strength reviewer's `mutations-run=7 restored=yes`
+is exactly the evidence that makes a zero-findings result trustworthy when it happens.
+
+Still zero false positives across all eight reviews. The marginal findings (three error-path
+defects reachable only by calling private functions directly) are real behaviours, not fabrications
+— but they need a triage filter before they reach a fix step.
