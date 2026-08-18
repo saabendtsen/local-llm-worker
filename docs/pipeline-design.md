@@ -121,3 +121,83 @@ Mechanical preprocessing before the frontier model sees anything:
   floor might handle it mechanically.
 - Does the frontier model need the diff, or only the findings? Findings-only is far cheaper and
   keeps the saving; whether triage quality survives it is untested.
+
+---
+
+# Proposed updates, after E7
+
+## 1. Put a linter in `verify`, not in review
+
+**Measured, not assumed.** Run against the worker's own output on `worker/f01-pi`, `ruff` default
+rules instantly report:
+
+```
+report-migration-coverage.py:8:8   F401  `glob` imported but unused
+test_migration_coverage.py:112:17  F841  Local variable `disp_sum` is assigned to but never used
+```
+
+Both were review findings. `disp_sum` was found by two of three generic reviewers and **none** of
+the focused ones; `glob` was found by **nobody** — the generic reviewer caught the neighbouring
+dead `LEGEND` constant and missed the unused import beside it.
+
+A linter gets both in milliseconds, deterministically, every time. Three reviewers spent 10–18
+minutes each and got them inconsistently.
+
+The important part is **where** it goes: in the acceptance command, so the *implementing* worker
+must pass it before a review ever runs. That turns a whole finding class into something the worker
+fixes itself, and stops reviewers spending attention on lint.
+
+`LEGEND` — an unused module-level constant — is not caught by any default rule, so a residual
+dead-code gap remains. It is small, and not worth a reviewer.
+
+The workspace currently has no lint config and exactly one pre-existing violation, so adoption is
+close to free.
+
+## 2. Replace the broad reviewer with focused ones
+
+E7 measured 14 findings from three focused reviewers against 5 from three broad ones, on the same
+diff. Proposed axes:
+
+| Axis | Status | Why |
+| --- | --- | --- |
+| error-paths | **proven** — 10 findings, 15 cases run | Found 7 defects the frontier reviewer missed |
+| consistency | **proven** — found the contradiction every broad reviewer but one missed | "Compute the same quantity two ways" is a procedure, not an insight |
+| test-strength | **proven** — 7 mutations run, file restored | Proved by execution what the frontier review only asserted |
+| **missing-coverage** | **new, untested** | The instructive E7 miss: `main()` has no test, the prompt listed absent coverage as a finding class, and the reviewer still spent every mutation on tests that exist |
+| spec-compliance | untested standalone | Requirement-by-requirement against the spec |
+| style / dead code | **drop** | The linter owns it, and does it better |
+
+The general principle E7 established: **this model executes procedures well and has insights
+rarely.** Every focused prompt that worked gave it a procedure — construct these eight inputs, check
+these relations both ways, apply these mutations and record the result. Give it procedures.
+
+Keep the honesty counters (`cases-tested`, `relations-checked`, `mutations-run`, `restored`). They
+worked: no focused reviewer claimed an all-clear, and `mutations-run=7 restored=yes` is what makes a
+zero-findings result trustworthy when it eventually happens.
+
+## 3. Aggregate mechanically, and take the union
+
+Union, never majority — E7's subtlest defect was found by exactly one reviewer of three, so majority
+voting would have discarded the best finding in the experiment. Before the frontier model sees
+anything:
+
+- deduplicate by `(file, line, axis)`;
+- sort by severity, then confidence;
+- drop `suspected` findings with an empty `evidence` field — enforcing a rule the reviewer was
+  already given;
+- keep each finding's `repro` command attached; it becomes the acceptance test for its own fix.
+
+## 4. Add a severity floor before auto-fix
+
+Three of the error-path findings are reachable only by calling private functions directly with
+malformed input. Real behaviours, not fabrications — but acting on them means adding defensive code
+to helpers nobody misuses.
+
+Triage currently handles this by judgement. A mechanical floor — only `severity: high` plus
+`confidence: verified` becomes a task without review — would handle the common case and leave the
+rest as advisory.
+
+## 5. What stays as designed
+
+One finding per cycle; the fix may only touch what its finding names; re-verify with tests, the
+linter, and the finding's own `repro` command rather than a second review.
