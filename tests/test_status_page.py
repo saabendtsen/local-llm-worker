@@ -326,6 +326,20 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(data["current"])
         self.assertFalse(gone.exists())
 
+    def test_no_command_prints_help(self) -> None:
+        """No sub-command → help on stdout, exit 1.
+
+        The runner must not use ``_run_cli`` here because that helper appends
+        ``--runs``, which argparse rejects when no sub-command is present.
+        """
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("usage:", proc.stdout.lower())
+
     def test_status_invalid_now(self) -> None:
         """Unparseable --now → exit 2, error on stderr naming --now, no traceback."""
         proc = _run_cli(
