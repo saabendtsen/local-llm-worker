@@ -57,5 +57,5 @@
   },
   "produced_no_changes": false,
   "meaningful_pass": true,
-  "harness_note": "The worker commit originally included evaluation/runs/f03-status-page/{prompt.txt,started.json} and three __pycache__/*.pyc files, staged by the harness because the repository under test is this one. Removed from the commit by the pipeline owner before review (git rm --cached + amend); the worker's own diff is scripts/status_page.py + tests/test_status_page.py, +775. diff stats below predate the cleanup. run_task.py now excludes runner artifacts from staging."
+  "harness_note": "The worker commit originally included evaluation/runs/f03-status-page/{prompt.txt,started.json} and three __pycache__/*.pyc files, staged by the harness because the repository under test is this one. Removed from the commit by the pipeline owner before review (git rm --cached + amend); the worker's own diff is scripts/status_page.py + tests/test_status_page.py, +775. diff stats below predate the cleanup. run_task.py now excludes runner artifacts from staging. Branch later rebased onto main (2e6a47d) so the diff under review excludes bytecode files main had stopped tracking."
 }
