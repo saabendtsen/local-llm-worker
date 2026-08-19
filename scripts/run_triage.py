@@ -45,7 +45,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from run_task import RUNS_DIR, TaskError, git, parse_task, write_started
+from run_task import RUNS_DIR, TaskError, git, parse_task, pipeline_of, write_started
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -681,7 +681,7 @@ def main() -> int:
 
     run_dir.mkdir(parents=True)
     write_started(run_dir, "triage", args.id, f"Triage of {args.branch} ({args.frontier})",
-                  branch=args.branch, frontier=args.frontier)
+                  pipeline=pipeline_of(meta["id"]), branch=args.branch, frontier=args.frontier)
     diff_path = (run_dir / "under-triage.patch").resolve()
     diff_path.write_text(diff, encoding="utf-8")
 

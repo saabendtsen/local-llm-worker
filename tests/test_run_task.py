@@ -11,7 +11,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from run_task import RUNS_DIR, is_runner_artifact, task_title, write_started  # noqa: E402
+from run_task import (  # noqa: E402
+    RUNS_DIR,
+    is_runner_artifact,
+    pipeline_of,
+    task_title,
+    write_started,
+)
 
 
 class TaskTitleTests(unittest.TestCase):
@@ -54,6 +60,15 @@ class RunnerArtifactTests(unittest.TestCase):
         repo = RUNS_DIR.parent.parent
         self.assertFalse(is_runner_artifact(repo, "scripts/status_page.py"))
         self.assertFalse(is_runner_artifact(Path("C:/elsewhere"), "evaluation/runs/x/prompt.txt"))
+
+
+class PipelineOfTests(unittest.TestCase):
+    def test_feature_fix_and_review_share_a_pipeline(self):
+        self.assertEqual(pipeline_of("f03-status-page"), "f03")
+        self.assertEqual(pipeline_of("f03-fix-02-invalid-now-clean-error"), "f03")
+
+    def test_id_without_dash_is_its_own_pipeline(self):
+        self.assertEqual(pipeline_of("0003"), "0003")
 
 
 if __name__ == "__main__":

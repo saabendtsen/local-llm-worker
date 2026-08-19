@@ -89,6 +89,16 @@ def task_title(body: str, fallback: str) -> str:
     return fallback
 
 
+def pipeline_of(spec_id: str) -> str:
+    """The pipeline a run belongs to: the first dash-separated token of the spec id.
+
+    `f03-status-page`, `f03-fix-02-invalid-now-clean-error` and a review of
+    either all map to `f03`, so a status page can group one feature's implement,
+    reviews, triage and fixes together without the runners sharing any state.
+    """
+    return spec_id.split("-", 1)[0]
+
+
 def write_started(run_dir: Path, kind: str, task_id: str, title: str, **extra: object) -> None:
     """Mark a run as in progress the moment its directory exists.
 
@@ -616,7 +626,8 @@ def main() -> int:
 
     run_dir.mkdir(parents=True)
     write_started(run_dir, "task", task_id, task_title(prompt, task_id),
-                  category=meta["category"], branch=branch, harness=args.harness)
+                  pipeline=pipeline_of(meta["id"]), category=meta["category"],
+                  branch=branch, harness=args.harness)
     print(f"task   : {task_id} ({meta['category']})")
     print(f"repo   : {repo}")
     print(f"branch : {branch}")

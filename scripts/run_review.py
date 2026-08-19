@@ -30,6 +30,7 @@ from run_task import (
     find_pi,
     git,
     parse_task,
+    pipeline_of,
     prompt_delivery,
     IDLE_TIMEOUT_DEFAULT,
     PROCESS_RULES,
@@ -122,7 +123,7 @@ def main() -> int:
 
     run_dir.mkdir(parents=True)
     write_started(run_dir, "review", args.id, f"Review of {args.branch} ({args.prompt})",
-                  branch=args.branch, axis=args.prompt)
+                  pipeline=pipeline_of(meta["id"]), branch=args.branch, axis=args.prompt)
     git(repo, "worktree", "add", "--detach", str(worktree), args.branch)
     print(f"review  : {args.id}")
     print(f"branch  : {args.branch} (base {base})")
