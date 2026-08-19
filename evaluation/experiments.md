@@ -977,11 +977,68 @@ boundaries and pinned both paths, 113 green.
 So the chain is not a substitute for a frontier read of the result; it is what makes that read
 cheap — one defect to find instead of eleven.
 
+### Addendum 1 — the defect the whole chain missed
+
+The page's request handler captured `datetime.now()` **once, at server start**, and every response
+used it: `generated_at` never moved, and a run that began after the server did showed a negative
+elapsed time — observed live at `-1419.6 s` while the first triage arm below was running.
+
+Four reviewers, an automated triage, six fix cycles and a frontier final read all let it through.
+Not for lack of a signal: the error-paths reviewer reported "negative duration accepted silently"
+(finding 6) and the consistency reviewer reported `_format_duration(-5.0)` rendering `-1:55`
+(finding 10). Both were **symptoms**. Triage — every arm of it — deferred them as "a design
+question about negative values the spec left open", and I agreed on the final read. Nobody asked
+*where a negative duration could come from* with a live clock; the answer was that the clock was
+not live.
+
+The lesson is a triage rule, not a reviewer one: **a `defer` on a symptom must name the cause or
+say the cause is unknown.** "Negative durations are a design question" is only true once you know
+they arise from a design choice and not from a bug. Written into `prompts/triage.md`.
+
+Fixed as [`f03-fix-08`](tasks/f03-fix-08-frozen-clock.md) by the worker — see below.
+
+### Addendum 2 — triage arms: findings-only, a repeat, and Codex
+
+Same ten findings, same spec, same branch, same prompt; `run_triage.py` run three more ways.
+Tasks generated, not run — dispositions are the subject.
+
+| Arm | Input | Elapsed | Valid | fix | test-only | defer | drop |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `tr-f03-claude` (original) | findings + diff by path | 217 s | 1st attempt | 3 | 3 | 2 | 2 |
+| `tr-f03-claude-fo` | `--findings-only` | 138 s | 1st attempt | 2 | 3 | 3 | 2 |
+| `tr-f03-claude-rep` | findings + diff by path, repeat | 158 s | 1st attempt | 1 | 2 | 4 | 3 |
+| `tr-f03-codex` | findings + diff by path | 16 s | **no** — usage limit | — | — | — | — |
+
+- **Stable core** across all three Claude arms: finding 2 (unreadable terminal → `running`) is a
+  fix, findings 1 and 8 are test pins, 7 and 9 are drops. Same verification text, same line cites.
+- **The error-path trio (3, 4, 5) flips.** The original fixed all three; findings-only fixed 3 and
+  5 and deferred 4 ("bind failures are one family, a design choice"); the repeat — *identical
+  configuration to the original* — deferred all three. So the findings-only difference sits
+  inside the variance band of the configuration it was compared with. E6's lesson holds for the
+  frontier step too: one run per arm measures nothing. Findings-only is 36% faster and, on this
+  evidence, not measurably worse; it needs a repeat arm of its own before it becomes the default.
+- **Codex**: the integration works — the prompt went in on stdin, the read-only sandbox was
+  applied, the runner recorded the failure honestly — but the account's usage limit was exhausted
+  and both attempts returned nothing within seconds. `valid: false`, no task files, exit 1. Retry
+  after the quota resets; until then Codex is wired but unmeasured. One cheap improvement made:
+  the runner should not spend a second attempt on a provider error it can recognise.
+- **Every arm deferred the negative-duration findings.** See Addendum 1.
+
+### fix-08, and the final tally
+
+[`f03-fix-08-frozen-clock`](tasks/f03-fix-08-frozen-clock.md), written by hand from the live
+observation: 709 s, the exact two-line change plus tests (`generated_at` advances between requests;
+a run started after the server has a non-negative duration), 116 → 120 green, merged; the live
+page's clock confirmed moving. Eight fix cycles on f03, fifteen across f02 and f03, none out of
+scope. The page the user asked for is now also correct about its one job.
+
+
 ### Verdict
 
 End to end, unattended, on a greenfield program: yes, once the harness stopped waiting on a
-process that would never return. Seven fix cycles held (thirteen across f02 and f03, none out of
-scope). The page is live on `http://127.0.0.1:8765` and showed its own pipeline's history as its
+process that would never return. Eight fix cycles held (fifteen across f02 and f03, none out of
+scope) — and one defect walked through every stage because every stage treated a symptom as a
+design choice; see Addendum 1. The page is live on `http://127.0.0.1:8765` and showed its own pipeline's history as its
 first content.
 
 What E9 adds to the pipeline:
@@ -990,6 +1047,10 @@ What E9 adds to the pipeline:
 2. **Inactivity is a failure mode** — watch the event stream, not only the clock.
 3. **A final frontier read after the last fix**, budgeted as one more cycle, not skipped because
    the reviewers were thorough.
+4. **Defer needs a cause.** A symptom deferred as design is a bug with a good excuse; the triage
+   prompt now says so.
+5. **Triage has variance too.** Three Claude runs on identical input produced 6, 5 and 3 tasks;
+   findings-only sat inside that band. Nothing about the frontier step is settled by one run.
 
 Open: an unexplained checkout of `worker/f03-status-page` in the main working tree between the
 triage and fix-01 (reflog only; no runner does it), so the chain ended on that branch rather than

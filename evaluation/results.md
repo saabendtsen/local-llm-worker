@@ -78,6 +78,7 @@ behavioural finding it produced is recorded under [Findings](#findings).
 | f03-fix-05 | pin CLI status values | tests | 12 | passed | **clean** | 257 s | triage-generated |
 | f03-fix-06 | pin idle page | tests | 14 | passed | **clean** | 221 s | triage-generated; mutation check |
 | f03-fix-07 | naive --now treated as UTC | bugfix | 10 | passed | **clean** | 257 s | from the final frontier read |
+| f03-fix-08 | served page used server start time as now | bugfix | 12 | passed | **clean** | 709 s | from a live observation; every reviewer/triage had deferred the symptom |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.

@@ -123,6 +123,29 @@ def build_prompt(instructions: str, spec_body: str, findings: list[dict], base: 
     )
 
 
+# Substrings in a frontier CLI's stderr that mean the provider refused the call
+# outright -- quota, authentication, billing. A second attempt with the same
+# prompt cannot help, so the runner stops after the first and says why.
+PROVIDER_ERROR_MARKERS = (
+    "usage limit",
+    "rate limit",
+    "quota",
+    "not logged in",
+    "unauthorized",
+    "authentication",
+    "billing",
+)
+
+
+def provider_error(stderr_tail: str) -> str | None:
+    """The first provider-error marker found in *stderr_tail*, or None."""
+    lowered = (stderr_tail or "").lower()
+    for marker in PROVIDER_ERROR_MARKERS:
+        if marker in lowered:
+            return marker
+    return None
+
+
 def rejection_suffix(raw_output: str, errors: list[str], max_echo: int = 20000) -> str:
     """What gets appended to the prompt on a retry.
 
@@ -773,6 +796,11 @@ def main() -> int:
             print(f"  rejected ({len(errors)} problem(s)):")
             for e in errors:
                 print(f"    - {e}")
+            refused = provider_error(result["stderr_tail"]) if not result["stdout"].strip() else None
+            if refused:
+                record["provider_error"] = refused
+                print(f"  provider refused the call ({refused!r}); not retrying.")
+                break
             if attempt < args.max_attempts:
                 current_prompt = prompt + rejection_suffix(result["stdout"], errors)
                 (run_dir / f"prompt-attempt-{attempt + 1}.txt").write_text(

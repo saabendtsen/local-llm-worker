@@ -1,0 +1,10 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-08-frozen-clock",
+  "title": "the served page must use the request time, not the server's start time",
+  "started_at": "2026-08-19T19:21:48+00:00",
+  "pipeline": "f03",
+  "category": "bugfix",
+  "branch": "worker/f03-fix-08",
+  "harness": "pi"
+}

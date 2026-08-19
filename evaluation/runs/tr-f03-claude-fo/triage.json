@@ -1,0 +1,359 @@
+{
+  "triage_id": "tr-f03-claude-fo",
+  "recorded_at": "2026-08-19T19:17:43+00:00",
+  "branch": "worker/f03-status-page",
+  "base": "2e6a47d",
+  "spec": "evaluation\\tasks\\f03-status-page.md",
+  "findings_file": "evaluation\\runs\\f03-status-page\\findings.json",
+  "findings_count": 10,
+  "findings_only": true,
+  "frontier": "claude",
+  "model": null,
+  "command": "'C:\\Users\\Quiet\\AppData\\Roaming\\npm\\claude.CMD' -p --output-format text --tools Read,Grep,Glob --permission-mode dontAsk --no-session-persistence --add-dir 'C:\\Dev\\homelab\\experiments\\local-llm-worker\\evaluation\\runs\\tr-f03-claude-fo'",
+  "task_prefix": "f03fo",
+  "attempts": [
+    {
+      "attempt": 1,
+      "elapsed_seconds": 138.5,
+      "exit_code": 0,
+      "timed_out": false,
+      "raw_output": "raw-attempt-1.txt",
+      "errors": [],
+      "stderr_tail": ""
+    }
+  ],
+  "valid": true,
+  "elapsed_seconds": 138.5,
+  "frontier_modified_worktree": false,
+  "triage": {
+    "dispositions": [
+      {
+        "findings": [
+          2
+        ],
+        "disposition": "fix",
+        "verified": "scripts/status_page.py:99-113: when a terminal file exists but _read_json_object returns None, line 109 appends entry.name to unreadable and line 110 `break`s out of the inner loop. Because the loop exits via break the `else:` at :111 is skipped, but terminal_file was initialised to None at :97 anyway, so the `if terminal_file is not None` at :115 is False and the `else` at :135-151 computes now \u2212 started_at and appends the record to `running`. The directory therefore lands in both `unreadable` and `running`, and becomes `current` if newest. Spec: running means none of the terminal files exists.",
+        "rationale": "Real defect in the core classification; a corrupt run.json makes a finished run show as the current in-flight run on the page.",
+        "task": {
+          "slug": "unreadable-terminal-not-running",
+          "title": "a run whose terminal file exists but is unreadable must not be listed as running",
+          "category": "bugfix",
+          "complexity": "small",
+          "files_allowed": [
+            "scripts/status_page.py",
+            "tests/test_status_page.py"
+          ],
+          "current_behavior": "In `collect_status` (scripts/status_page.py:96-151), when `started.json` is valid and e.g. `run.json` exists but is not a JSON object, line 109 does `unreadable.append(entry.name)` then line 110 `break`s. `terminal_file` is still `None` (initialised at :97), so control falls into the `else:` branch at :135 which computes `now - started_at` and appends the record to `running`. The same directory therefore appears in BOTH `unreadable` and `running`, and becomes `current` when it is the newest.\n\nRepro: create `<fixture>/b/started.json` = `{\"kind\":\"task\",\"task_id\":\"b\",\"title\":\"B\",\"started_at\":\"2026-08-19T09:00:00+00:00\"}` and `<fixture>/b/run.json` = `[1, 2, 3]`, then run `python scripts/status_page.py status --runs <fixture> --now 2026-08-19T10:00:00+00:00`. Output has `unreadable: [\"b\"]` AND `running: [{\"task_id\": \"b\", ... \"duration_seconds\": 3600.0}]` and `current` is that record.",
+          "desired_behavior": "A directory with a valid `started.json` and a terminal file (`run.json`, `review.json` or `triage.json`) that is present but truncated / not valid JSON / not a JSON object is listed in `unreadable` exactly once and appears in neither `running` nor `recent`. `current` is not that run. All other directories are still processed normally. Behaviour for directories with a valid terminal file, with no terminal file, or with no/invalid `started.json` is unchanged.",
+          "out_of_scope": [
+            "Do not change how a missing or invalid started.json is handled (lines 88-94).",
+            "Do not change the duration arithmetic, sorting, the recent cap, the CLI, or the HTTP handler.",
+            "Do not validate or clamp negative durations.",
+            "Do not address any other review finding."
+          ],
+          "cases": [
+            {
+              "case": "valid started.json (started_at 2026-08-19T09:00:00+00:00) + run.json containing `[1, 2, 3]`, now = 2026-08-19T10:00:00+00:00",
+              "source_of_truth": "`unreadable == [\"<dirname>\"]` (exactly one entry), `running == []`, `recent == []`, `current is None` \u2014 spec: a run is running only when none of the terminal files exists, and an unreadable terminal file goes in `unreadable` by name"
+            },
+            {
+              "case": "valid started.json + review.json containing the truncated text `{\"recorded_at\": ` ",
+              "source_of_truth": "same as above: in `unreadable` once, not in `running`, not in `recent`"
+            },
+            {
+              "case": "the unreadable-terminal directory above alongside a second, healthy running run `r1` started 2026-08-19T09:30:00+00:00",
+              "source_of_truth": "`running` has exactly one record, task_id `r1`, duration_seconds 1800.0 (now \u2212 started_at); `current[\"task_id\"] == \"r1\"`; `unreadable` contains only the bad directory"
+            },
+            {
+              "case": "existing finished-task case (started 10:00:00, run.json recorded_at 10:06:32)",
+              "source_of_truth": "still `duration_seconds == 392.0`, `finished_at == \"2026-08-19T10:06:32+00:00\"` \u2014 the existing `test_finished_task` assertion at tests/test_status_page.py:117-118 must keep passing"
+            }
+          ],
+          "acceptance": [
+            "Every case above is covered by a new test in `CollectStatusTests` in tests/test_status_page.py and passes.",
+            "`python -m ruff check scripts tests && python -m pytest -q` passes \u2014 the whole suite, not only the new tests. Run it once before editing to record the baseline count on this branch (main baseline is 71 passed; this branch adds tests/test_status_page.py, so expect more); the count after your change must be that baseline plus your new tests, with zero failures."
+          ],
+          "notes": [
+            "Gotcha: a plain `continue` at line 110 would continue the INNER `for tf_name in TERMINAL_FILES` loop, not skip the directory. Use a flag (e.g. `bad_terminal = True` before the `break`, then `if bad_terminal: continue` right after the inner loop, before line 115), or restructure equivalently so that neither the `if terminal_file is not None` branch nor its `else` runs for that directory.",
+            "Build fixtures with the existing helpers `_write_started` / `_write_terminal` in tests/test_status_page.py and write the bad terminal file with `(run_dir / \"run.json\").write_text(\"[1, 2, 3]\", encoding=\"utf-8\")`, the same way `test_array_started_json` (:189-198) writes its bad started.json.",
+            "Repo conventions: `from __future__ import annotations`, `pathlib` only, `unittest.TestCase`, fixtures in `setUp` with `tempfile.TemporaryDirectory()`."
+          ],
+          "mutation_check": null
+        }
+      },
+      {
+        "findings": [
+          3
+        ],
+        "disposition": "fix",
+        "verified": "scripts/status_page.py:175 `now = datetime.fromisoformat(args.now) if args.now else None` \u2014 no try/except; `main()` at :326-332 and the `__main__` block at :335-339 re-raise everything, so `--now not-a-date` produces a full ValueError traceback. tests/test_status_page.py has no test for an invalid --now.",
+        "rationale": "Real uncaught exception on a documented flag; cheap to fix via argparse.",
+        "task": {
+          "slug": "invalid-now-clean-error",
+          "title": "reject an unparseable --now with a one-line error instead of a traceback",
+          "category": "bugfix",
+          "complexity": "small",
+          "files_allowed": [
+            "scripts/status_page.py",
+            "tests/test_status_page.py"
+          ],
+          "current_behavior": "scripts/status_page.py:175 parses the flag with `datetime.fromisoformat(args.now)` unguarded. `python scripts/status_page.py status --runs <any> --now not-a-date` prints a Python traceback ending in `ValueError: Invalid isoformat string: 'not-a-date'` and exits 1.",
+          "desired_behavior": "An unparseable `--now` value makes the `status` sub-command exit with a non-zero code, print a single-line error message to stderr that mentions `--now`, and print no traceback. A valid `--now` (e.g. `2026-08-19T10:02:00+00:00`) keeps working exactly as today: the clock is pinned and exit code is 0. Omitting `--now` keeps using `datetime.now(timezone.utc)`.",
+          "out_of_scope": [
+            "Do not change `collect_status` or the HTTP handler.",
+            "Do not add validation for --port or --host.",
+            "Do not address any other review finding."
+          ],
+          "cases": [
+            {
+              "case": "`status --now not-a-date --runs <fixture>` via the existing `_run_cli` helper",
+              "source_of_truth": "`proc.returncode != 0`; `\"Traceback\" not in proc.stderr`; `\"--now\" in proc.stderr`"
+            },
+            {
+              "case": "`status --now 2026-08-19T10:02:00+00:00 --runs <fixture with finished run c1>`",
+              "source_of_truth": "the existing `test_status_exits_0_and_parses_json` (tests/test_status_page.py:258-268) still passes: returncode 0 and stdout parses as JSON"
+            },
+            {
+              "case": "`status --runs <fixture>` with no --now",
+              "source_of_truth": "returncode 0 and stdout parses as JSON (the existing `test_status_non_existent_runs` at :270-278 covers this path)"
+            }
+          ],
+          "acceptance": [
+            "A new test in `CliTests` covers the invalid --now case above and passes.",
+            "`python -m ruff check scripts tests && python -m pytest -q` passes \u2014 the whole suite, not only the new test. Record the passing count before editing; after, it must be that count plus your new test, zero failures."
+          ],
+          "notes": [
+            "Simplest implementation: give the `--now` argument at scripts/status_page.py:308 `type=datetime.fromisoformat` \u2014 argparse catches the ValueError from a type callable and prints `argument --now: invalid fromisoformat value: 'not-a-date'` then exits 2. If you do that, `args.now` is already a `datetime`, so change line 175 to `now = args.now` (otherwise fromisoformat is called on a datetime and raises TypeError).",
+            "Alternative: wrap line 175 in `try/except ValueError`, print a message to `sys.stderr`, return 2. Either is acceptable; pick one.",
+            "Use the existing `_run_cli` helper (tests/test_status_page.py:237-244); it appends `--runs` for you."
+          ],
+          "mutation_check": null
+        }
+      },
+      {
+        "findings": [
+          1
+        ],
+        "disposition": "fix-test-only",
+        "verified": "scripts/status_page.py:212-218: when `current` is falsy, `title = kind = task_id = duration = \"idle\"`, and these are interpolated into the page at :254-257. tests/test_status_page.py `HttpServerTests._populate_fixture` (:295-300) always creates a running run `http-1`, so every HTTP test sees a non-null current; no test fetches `/` with nothing running or asserts on \"idle\".",
+        "rationale": "Spec-required rendering (\"idle\" when current is null) is correct but unpinned.",
+        "task": {
+          "slug": "html-idle-test",
+          "title": "pin that GET / shows \"idle\" when nothing is running",
+          "category": "tests",
+          "complexity": "small",
+          "files_allowed": [
+            "tests/test_status_page.py"
+          ],
+          "current_behavior": "scripts/status_page.py:217-218 renders the literal `idle` for title, kind, id and elapsed when `current` is None. The HTTP fixture in tests/test_status_page.py:295-300 always has a running run (`http-1`), so no test ever requests `/` while idle, and replacing `\"idle\"` with any other string passes the suite.",
+          "desired_behavior": "A new test in `HttpServerTests` makes the tree idle (no in-flight run), fetches `GET /`, and asserts the body contains `idle` (and status 200, Content-Type starting with `text/html`). The implementation is not modified.",
+          "out_of_scope": [
+            "Do not modify scripts/status_page.py at all.",
+            "Do not change the existing fixture in `_populate_fixture` \u2014 other tests depend on `http-1` being running; make the tree idle inside the new test only.",
+            "Do not address any other review finding."
+          ],
+          "cases": [
+            {
+              "case": "GET / after `http-1` has been finished by writing `run.json` with `recorded_at` \"2026-08-19T10:01:00+00:00\" into `self.runs / \"http-1\"` (use `_write_terminal`)",
+              "source_of_truth": "status 200; `Content-Type` starts with `text/html`; `\"idle\" in body` \u2014 spec: the page shows \"idle\" when `current` is null"
+            },
+            {
+              "case": "same request, sanity check that the tree really is idle",
+              "source_of_truth": "`collect_status(self.runs, datetime.now(timezone.utc))[\"current\"] is None` \u2014 the same assertion style as `test_nothing_running` at tests/test_status_page.py:152"
+            }
+          ],
+          "acceptance": [
+            "The new test passes.",
+            "The mutation check below makes the new test fail; restore the original and quote the failure in your summary.",
+            "`python -m ruff check scripts tests && python -m pytest -q` passes \u2014 the whole suite, not only the new test; the passing count is the pre-edit baseline plus one."
+          ],
+          "notes": [
+            "Copy the request/assert style of `test_html_200_contains_current_title` (tests/test_status_page.py:331-337): `urlopen(f\"http://127.0.0.1:{self.port}/\")`, `resp.read().decode()`.",
+            "Writing `run.json` into `http-1` inside the test is fine because `setUp` rebuilds the temporary fixture for every test.",
+            "`datetime` and `timezone` are already imported in the test file; do not add unused imports (ruff fails on them)."
+          ],
+          "mutation_check": "In scripts/status_page.py line 218, change `title = kind = task_id = duration = \"idle\"` to `title = kind = task_id = duration = \"SHOULD_NOT_APPEAR\"`; the new test must fail. Restore the line afterwards."
+        }
+      },
+      {
+        "findings": [
+          8
+        ],
+        "disposition": "fix-test-only",
+        "verified": "tests/test_status_page.py:258-268 `test_status_exits_0_and_parses_json` writes a finished run c1 (started 10:00:00, run.json recorded 10:01:00) but asserts only `assertIn(\"current\"/\"recent\"/\"ignored\", data)`. scripts/status_page.py:173-178 `_cmd_status` is correct (passes runs_dir and now to collect_status and prints the result). The CLI seam's values are unpinned: a wrong runs_dir in `_cmd_status` would still pass.",
+        "rationale": "The required CLI seam checks key presence only; strengthen it to values.",
+        "task": {
+          "slug": "cli-status-values-test",
+          "title": "assert the CLI status output's values, not just its keys",
+          "category": "tests",
+          "complexity": "small",
+          "files_allowed": [
+            "tests/test_status_page.py"
+          ],
+          "current_behavior": "`test_status_exits_0_and_parses_json` (tests/test_status_page.py:258-268) builds a finished run `c1` (started `2026-08-19T10:00:00+00:00`, `run.json` recorded_at `2026-08-19T10:01:00+00:00`), runs `status --now 2026-08-19T10:02:00+00:00`, and asserts only that keys `current`, `recent`, `ignored` exist. If `_cmd_status` passed the wrong directory to `collect_status`, the test would still pass.",
+          "desired_behavior": "The same test (extend it, or add a sibling test in `CliTests`) asserts the actual values of the JSON printed by the `status` sub-command for that fixture.",
+          "out_of_scope": [
+            "Do not modify scripts/status_page.py at all.",
+            "Do not change the `_run_cli` helper.",
+            "Do not address any other review finding."
+          ],
+          "cases": [
+            {
+              "case": "`status --now 2026-08-19T10:02:00+00:00` over the fixture with finished run c1",
+              "source_of_truth": "`data[\"current\"] is None`; `data[\"running\"] == []`; `len(data[\"recent\"]) == 1`; `data[\"recent\"][0][\"task_id\"] == \"c1\"`; `data[\"recent\"][0][\"duration_seconds\"] == 60.0` (recorded_at 10:01:00 \u2212 started_at 10:00:00); `data[\"recent\"][0][\"finished_at\"] == \"2026-08-19T10:01:00+00:00\"`; `data[\"ignored\"] == 0`; `data[\"unreadable\"] == []`"
+            }
+          ],
+          "acceptance": [
+            "The strengthened/new test passes.",
+            "The mutation check below makes it fail; restore and quote the failure in your summary.",
+            "`python -m ruff check scripts tests && python -m pytest -q` passes \u2014 the whole suite, not only this test."
+          ],
+          "notes": [
+            "The fixture and command are already in place at tests/test_status_page.py:260-265; only the assertions need adding.",
+            "JSON numbers: `60.0` and `60` compare equal in Python, so `assertEqual(..., 60.0)` is fine."
+          ],
+          "mutation_check": "In scripts/status_page.py line 176, change `result = collect_status(runs_dir, now)` to `result = collect_status(runs_dir / \"missing\", now)`; the CLI test must fail (it will see `recent == []`). Restore the line afterwards."
+        }
+      },
+      {
+        "findings": [
+          5
+        ],
+        "disposition": "fix-test-only",
+        "verified": "scripts/status_page.py:329-331: `if not args.command: parser.print_help(); return 1`. No test in tests/test_status_page.py invokes the script without a sub-command; `_run_cli` (:237-244) always appends `--runs`, which argparse would reject without a sub-command.",
+        "rationale": "Correct but untested exit path; trivial to pin.",
+        "task": {
+          "slug": "no-subcommand-exit-1-test",
+          "title": "pin that running the script with no sub-command prints help and exits 1",
+          "category": "tests",
+          "complexity": "small",
+          "files_allowed": [
+            "tests/test_status_page.py"
+          ],
+          "current_behavior": "`main()` at scripts/status_page.py:329-331 prints help and returns 1 when no sub-command is given. Nothing tests this; changing `return 1` to `return 0` passes the suite.",
+          "desired_behavior": "A new test in `CliTests` runs `[sys.executable, str(SCRIPT)]` with no further arguments (call `subprocess.run(..., capture_output=True, text=True)` directly \u2014 do NOT use `_run_cli`, which appends `--runs` and would make argparse exit 2 with 'unrecognized arguments') and asserts the exit code is 1 and help text was printed.",
+          "out_of_scope": [
+            "Do not modify scripts/status_page.py at all.",
+            "Do not change `_run_cli`.",
+            "Do not address any other review finding."
+          ],
+          "cases": [
+            {
+              "case": "`python scripts/status_page.py` with no arguments",
+              "source_of_truth": "`proc.returncode == 1` (scripts/status_page.py:331 returns 1); `\"usage:\" in proc.stdout` (argparse `print_help()` writes to stdout, and `_build_parser` has sub-commands so the usage line is present)"
+            }
+          ],
+          "acceptance": [
+            "The new test passes.",
+            "The mutation check below makes it fail; restore and quote the failure in your summary.",
+            "`python -m ruff check scripts tests && python -m pytest -q` passes \u2014 the whole suite, not only this test."
+          ],
+          "notes": [
+            "`subprocess`, `sys` and `SCRIPT` are already imported/defined at the top of tests/test_status_page.py."
+          ],
+          "mutation_check": "In scripts/status_page.py line 331, change `return 1` to `return 0`; the new test must fail on the return-code assertion. Restore afterwards."
+        }
+      },
+      {
+        "findings": [
+          4
+        ],
+        "disposition": "defer",
+        "verified": "scripts/status_page.py:285 `ThreadingHTTPServer((host, port), handler)` with `--port` declared `type=int` at :320 and no range check; a negative port raises OverflowError from socket.bind and nothing catches it (:335-339 re-raises).",
+        "rationale": "Real but out of the spec's scope and low value: bind failures (bad port, port in use, bad host) are one family and deciding how to report them is a design choice the spec left open; testing it needs a `serve` subprocess. Not worth a task now."
+      },
+      {
+        "findings": [
+          6
+        ],
+        "disposition": "defer",
+        "verified": "scripts/status_page.py:119-121 computes `(recorded_dt - started_dt).total_seconds()` with no sign check, exactly as the spec's 'duration_seconds = recorded_at \u2212 started_at' rule prescribes.",
+        "rationale": "The code follows the spec's arithmetic literally; whether to clamp, flag or mark unreadable on clock skew is a design decision the spec does not make. Defer rather than invent policy."
+      },
+      {
+        "findings": [
+          10
+        ],
+        "disposition": "defer",
+        "verified": "scripts/status_page.py:34-39 uses `//` and `%` on `int(seconds)`, so `_format_duration(-5.0)` returns `\"-1:55\"`. Only reachable when a duration is negative (same root as finding 6).",
+        "rationale": "Cosmetic, and dependent on the same open decision about negative durations as finding 6; fix both together if that policy is ever decided."
+      },
+      {
+        "findings": [
+          7
+        ],
+        "disposition": "drop",
+        "verified": "tests/test_status_page.py:356-370 `test_status_json_consistent_with_pure_function` compares the full `/status.json` body (minus generated_at) against `collect_status(self.runs, now)` for a fixture containing a running run and a finished run; the reviewer's hardcoded-empty mutation of `_serve_json` would fail that assertion. The reviewer's '1 passed' ran only the weak test.",
+        "rationale": "Behaviour is already pinned by another test in the same class."
+      },
+      {
+        "findings": [
+          9
+        ],
+        "disposition": "drop",
+        "verified": "tests/test_status_page.py:123-139 assert `recent[0][\"kind\"]` and `running == []` for review/triage; the finding's own note says `test_current_is_newest_of_two` (:95-106) catches the mutation. Additionally, removing `review.json`/`triage.json` from TERMINAL_FILES (scripts/status_page.py:25) would make those runs appear in `running`, which the `running == []` assertions at :130/:139 do catch.",
+        "rationale": "The mutation is caught by the suite; the per-terminal-file recognition is pinned."
+      }
+    ],
+    "order": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "summary": "Two real defects (an unreadable terminal file leaves the run listed as running/current; an invalid --now tracebacks) become bugfix tasks; three test gaps (idle HTML, CLI values, no-subcommand exit) become test-only tasks; negative-duration/port findings deferred as open design decisions outside the spec; two test-strength findings dropped because other tests already pin the behaviour."
+  },
+  "tasks": [
+    {
+      "id": "f03fo-fix-01-unreadable-terminal-not-running",
+      "file": "C:\\Dev\\homelab\\experiments\\local-llm-worker\\evaluation\\tasks\\f03fo-fix-01-unreadable-terminal-not-running.md",
+      "base": "worker/f03-status-page",
+      "branch": "worker/f03fo-fix-01",
+      "disposition": "fix",
+      "findings": [
+        2
+      ]
+    },
+    {
+      "id": "f03fo-fix-02-invalid-now-clean-error",
+      "file": "C:\\Dev\\homelab\\experiments\\local-llm-worker\\evaluation\\tasks\\f03fo-fix-02-invalid-now-clean-error.md",
+      "base": "worker/f03fo-fix-01",
+      "branch": "worker/f03fo-fix-02",
+      "disposition": "fix",
+      "findings": [
+        3
+      ]
+    },
+    {
+      "id": "f03fo-fix-03-html-idle-test",
+      "file": "C:\\Dev\\homelab\\experiments\\local-llm-worker\\evaluation\\tasks\\f03fo-fix-03-html-idle-test.md",
+      "base": "worker/f03fo-fix-02",
+      "branch": "worker/f03fo-fix-03",
+      "disposition": "fix-test-only",
+      "findings": [
+        1
+      ]
+    },
+    {
+      "id": "f03fo-fix-04-cli-status-values-test",
+      "file": "C:\\Dev\\homelab\\experiments\\local-llm-worker\\evaluation\\tasks\\f03fo-fix-04-cli-status-values-test.md",
+      "base": "worker/f03fo-fix-03",
+      "branch": "worker/f03fo-fix-04",
+      "disposition": "fix-test-only",
+      "findings": [
+        8
+      ]
+    },
+    {
+      "id": "f03fo-fix-05-no-subcommand-exit-1-test",
+      "file": "C:\\Dev\\homelab\\experiments\\local-llm-worker\\evaluation\\tasks\\f03fo-fix-05-no-subcommand-exit-1-test.md",
+      "base": "worker/f03fo-fix-04",
+      "branch": "worker/f03fo-fix-05",
+      "disposition": "fix-test-only",
+      "findings": [
+        5
+      ]
+    }
+  ]
+}

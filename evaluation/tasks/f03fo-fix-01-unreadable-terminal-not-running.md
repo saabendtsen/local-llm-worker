@@ -1,0 +1,55 @@
+---
+id: f03fo-fix-01-unreadable-terminal-not-running
+repo: C:\Dev\homelab\experiments\local-llm-worker
+category: bugfix
+complexity: small
+verify: python -m ruff check scripts tests && python -m pytest -q
+base: worker/f03-status-page
+branch: worker/f03fo-fix-01
+---
+
+# Task: a run whose terminal file exists but is unreadable must not be listed as running
+
+**Edit `scripts/status_page.py` and `tests/test_status_page.py`. Nothing else.**
+
+This is a single, bounded fix. Do not refactor, do not improve anything the task does not name, and do not address any other review finding.
+
+## Current behavior
+
+In `collect_status` (scripts/status_page.py:96-151), when `started.json` is valid and e.g. `run.json` exists but is not a JSON object, line 109 does `unreadable.append(entry.name)` then line 110 `break`s. `terminal_file` is still `None` (initialised at :97), so control falls into the `else:` branch at :135 which computes `now - started_at` and appends the record to `running`. The same directory therefore appears in BOTH `unreadable` and `running`, and becomes `current` when it is the newest.
+
+Repro: create `<fixture>/b/started.json` = `{"kind":"task","task_id":"b","title":"B","started_at":"2026-08-19T09:00:00+00:00"}` and `<fixture>/b/run.json` = `[1, 2, 3]`, then run `python scripts/status_page.py status --runs <fixture> --now 2026-08-19T10:00:00+00:00`. Output has `unreadable: ["b"]` AND `running: [{"task_id": "b", ... "duration_seconds": 3600.0}]` and `current` is that record.
+
+## Desired behavior
+
+A directory with a valid `started.json` and a terminal file (`run.json`, `review.json` or `triage.json`) that is present but truncated / not valid JSON / not a JSON object is listed in `unreadable` exactly once and appears in neither `running` nor `recent`. `current` is not that run. All other directories are still processed normally. Behaviour for directories with a valid terminal file, with no terminal file, or with no/invalid `started.json` is unchanged.
+
+## Out of scope
+
+- Do not change how a missing or invalid started.json is handled (lines 88-94).
+- Do not change the duration arithmetic, sorting, the recent cap, the CLI, or the HTTP handler.
+- Do not validate or clamp negative durations.
+- Do not address any other review finding.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| valid started.json (started_at 2026-08-19T09:00:00+00:00) + run.json containing `[1, 2, 3]`, now = 2026-08-19T10:00:00+00:00 | `unreadable == ["<dirname>"]` (exactly one entry), `running == []`, `recent == []`, `current is None` — spec: a run is running only when none of the terminal files exists, and an unreadable terminal file goes in `unreadable` by name |
+| valid started.json + review.json containing the truncated text `{"recorded_at": ` | same as above: in `unreadable` once, not in `running`, not in `recent` |
+| the unreadable-terminal directory above alongside a second, healthy running run `r1` started 2026-08-19T09:30:00+00:00 | `running` has exactly one record, task_id `r1`, duration_seconds 1800.0 (now − started_at); `current["task_id"] == "r1"`; `unreadable` contains only the bad directory |
+| existing finished-task case (started 10:00:00, run.json recorded_at 10:06:32) | still `duration_seconds == 392.0`, `finished_at == "2026-08-19T10:06:32+00:00"` — the existing `test_finished_task` assertion at tests/test_status_page.py:117-118 must keep passing |
+
+## Acceptance criteria
+
+- [ ] Every case above is covered by a new test in `CollectStatusTests` in tests/test_status_page.py and passes.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests. Run it once before editing to record the baseline count on this branch (main baseline is 71 passed; this branch adds tests/test_status_page.py, so expect more); the count after your change must be that baseline plus your new tests, with zero failures.
+- [ ] The suite is green on `worker/f03-status-page`, so any failure you see is one you introduced.
+- [ ] Return a concise summary of what was modified and anything left unresolved.
+
+## Notes
+
+- Gotcha: a plain `continue` at line 110 would continue the INNER `for tf_name in TERMINAL_FILES` loop, not skip the directory. Use a flag (e.g. `bad_terminal = True` before the `break`, then `if bad_terminal: continue` right after the inner loop, before line 115), or restructure equivalently so that neither the `if terminal_file is not None` branch nor its `else` runs for that directory.
+- Build fixtures with the existing helpers `_write_started` / `_write_terminal` in tests/test_status_page.py and write the bad terminal file with `(run_dir / "run.json").write_text("[1, 2, 3]", encoding="utf-8")`, the same way `test_array_started_json` (:189-198) writes its bad started.json.
+- Repo conventions: `from __future__ import annotations`, `pathlib` only, `unittest.TestCase`, fixtures in `setUp` with `tempfile.TemporaryDirectory()`.
+- Generated by triage from review finding(s) 2.

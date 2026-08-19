@@ -73,6 +73,13 @@ issue. **Prefer one finding per task.**
   sentences.
 - `defer` — real, but the fix is disproportionate to the value right now (needs mocking machinery
   the suite does not have, cosmetic, depends on a design decision the spec left open). Say why.
+  **A `defer` on a symptom must name its cause, or say the cause is unknown.** "Negative durations
+  are a design question" is true only once you know they come from a design choice. On f03 two
+  reviewers reported negative durations, every triage deferred them as design, and the cause was
+  a request handler that had captured the clock once at server start — a plain bug, fixable in
+  two lines, that stayed in the code through six fix cycles. Before deferring, ask *how could this
+  value arise on the current branch?* and read until you know. If the answer is a defect, it is a
+  `fix`, however cosmetic the symptom looked.
 
 **Step 5 — Write each task.** Bounded, concrete, and in the voice of a brief to a junior who will
 not ask questions:
@@ -114,6 +121,8 @@ file changes are visible to later ones.
   is repeatable. Check the claim against what the format or library actually does.
 - **Test-strength findings whose own `result:` shows other tests caught the mutation** — that is
   usually a drop: the behaviour is pinned, just not by the test the reviewer was looking at.
+- **Symptoms reported as findings** — a negative number, an impossible timestamp, a count that
+  never changes. The reviewer saw the effect; find the cause before you decide the disposition.
 
 ## Output contract
 

@@ -30,6 +30,7 @@ from run_triage import (  # noqa: E402
     render_task,
     render_triage_table,
     validate_triage,
+    provider_error,
 )
 
 FINDINGS = [
@@ -609,6 +610,15 @@ class TriageTableTests(unittest.TestCase):
         plan_tasks(triage, findings=FINDINGS, prefix="p", spec_meta=SPEC_META,
                    reviewed_branch="worker/f99-thing")
         self.assertEqual(triage, before)
+
+
+class ProviderErrorTests(unittest.TestCase):
+    def test_usage_limit_is_a_provider_error(self):
+        self.assertEqual(provider_error("ERROR: You've hit your usage limit. Upgrade..."), "usage limit")
+
+    def test_ordinary_stderr_is_not(self):
+        self.assertIsNone(provider_error("warning: skill descriptions were shortened"))
+        self.assertIsNone(provider_error(""))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,143 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+index df8e8aa..c4e1eaa 100644
+--- a/scripts/status_page.py
++++ b/scripts/status_page.py
+@@ -206,13 +206,13 @@ class _StatusHandler(BaseHTTPRequestHandler):
+             self._send(404, "Not Found", "text/plain")
+ 
+     def _serve_json(self) -> None:
+-        result = collect_status(self._runs_dir, self._now)
++        result = collect_status(self._runs_dir, datetime.now(timezone.utc))
+         self._send(200, json.dumps(result, indent=2), "application/json; charset=utf-8")
+ 
+     def _serve_html(self) -> None:
+         import html as _html
+ 
+-        result = collect_status(self._runs_dir, self._now)
++        result = collect_status(self._runs_dir, datetime.now(timezone.utc))
+         current = result["current"]
+ 
+         if current:
+@@ -285,7 +285,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
+     handler: type[_StatusHandler] = type(
+         "_StatusHandler",
+         (_StatusHandler,),
+-        {"_runs_dir": runs_dir, "_now": datetime.now(timezone.utc)},
++        {"_runs_dir": runs_dir},
+     )
+ 
+     server = ThreadingHTTPServer((host, port), handler)
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 2f17925..2336193 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -439,13 +439,13 @@ class HttpServerTests(unittest.TestCase):
+     def _start_server(self) -> None:
+         from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
+ 
+-        now = datetime.now(timezone.utc)
+-        # Bind *_runs_dir* and *_now* as *class* attributes so every handler
+-        # instance can read them — mimics the pattern in _cmd_serve().
++        # Bind *_runs_dir* as a class attribute so every handler
++        # instance can read it.  _now is no longer stored; each request
++        # calls datetime.now(timezone.utc) at request time.
+         self._handler_class = type(
+             "_TestStatusHandler",
+             (_StatusHandler,),
+-            {"_runs_dir": self.runs, "_now": now},
++            {"_runs_dir": self.runs},
+         )
+         self.server = ThreadingHTTPServer((DEFAULT_HOST, 0), self._handler_class)
+         self.port = self.server.server_address[1]
+@@ -492,15 +492,13 @@ class HttpServerTests(unittest.TestCase):
+ 
+     def test_status_json_consistent_with_pure_function(self) -> None:
+         """HTTP /status.json body (minus generated_at) equals collect_status output."""
+-        now = datetime.now(timezone.utc)
+-        # Patch the handler class so the running server uses our fixed clock.
+-        self._handler_class._now = now
+-
+-        expected = collect_status(self.runs, now)
+-
+         resp = urlopen(f"http://127.0.0.1:{self.port}/status.json")
+         data = json.loads(resp.read().decode())
+ 
++        # Use the response's generated_at as the reference time.
++        ref_now = datetime.fromisoformat(data["generated_at"])
++        expected = collect_status(self.runs, ref_now)
++
+         # generated_at is always different (computed at response time)
+         expected.pop("generated_at")
+         data.pop("generated_at")
+@@ -543,6 +541,58 @@ class HttpServerTests(unittest.TestCase):
+         self.assertFalse(gone.exists(),
+                          "collect_status created the runs directory")
+ 
++    def test_generated_at_advances_between_requests(self) -> None:
++        """Second GET /status.json must have a later generated_at than the first.
++
++        This test fails if ``now`` is captured once at server start instead of
++        per-request.
++        """
++        resp1 = urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        data1 = json.loads(resp1.read().decode())
++        import time as _time
++        _time.sleep(1.1)
++        resp2 = urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        data2 = json.loads(resp2.read().decode())
++        dt1 = datetime.fromisoformat(data1["generated_at"])
++        dt2 = datetime.fromisoformat(data2["generated_at"])
++        self.assertGreater(dt2, dt1)
++
++    def test_run_started_after_server_has_non_negative_duration(self) -> None:
++        """Write started.json with datetime.now() after server start → duration >= 0.
++
++        Reproduces the observed defect: a run that starts after the server
++        started must NOT have a negative duration_seconds.
++        """
++        now_str = datetime.now(timezone.utc).isoformat()
++        _write_started(self.runs, "post-start", "task", "Post-start run", now_str)
++        resp = urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        data = json.loads(resp.read().decode())
++        self.assertGreaterEqual(data["current"]["duration_seconds"], 0)
++
++    def test_html_non_negative_elapsed_for_post_start_run(self) -> None:
++        """GET / with a post-start run → elapsed cell does not show negative duration."""
++        now_str = datetime.now(timezone.utc).isoformat()
++        _write_started(self.runs, "post-start-html", "task", "Post-start HTML run", now_str)
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        self.assertEqual(resp.status, 200)
++        body = resp.read().decode()
++        # _format_duration of a non-negative value never contains "-0:" or "-1:"
++        self.assertNotIn("-0:", body)
++        self.assertNotIn("-1:", body)
++
++    def test_status_now_untouched_for_running_run(self) -> None:
++        """status --now 2026-08-19T10:05:00+00:00 against a running run started 10:00:00+00:00 → 300.0."""
++        now_dir = Path(tempfile.mkdtemp()) / "runs"
++        now_dir.mkdir()
++        _write_started(now_dir, "nx", "task", "Now-untouched", "2026-08-19T10:00:00+00:00")
++        proc = _run_cli(
++            ["status", "--now", "2026-08-19T10:05:00+00:00"],
++            now_dir,
++        )
++        self.assertEqual(proc.returncode, 0)
++        data = json.loads(proc.stdout)
++        self.assertEqual(data["current"]["duration_seconds"], 300.0)
++
+ 
+ # ---------------------------------------------------------------------------
+ # HTTP server — idle (no current run)
+@@ -569,11 +619,10 @@ class HttpIdleServerTests(unittest.TestCase):
+     def _start_server(self) -> None:
+         from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
+ 
+-        now = datetime.now(timezone.utc)
+         self._handler_class = type(
+             "_IdleStatusHandler",
+             (_StatusHandler,),
+-            {"_runs_dir": self.runs, "_now": now},
++            {"_runs_dir": self.runs},
+         )
+         self.server = ThreadingHTTPServer((DEFAULT_HOST, 0), self._handler_class)
+         self.port = self.server.server_address[1]
