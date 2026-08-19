@@ -206,13 +206,13 @@ class _StatusHandler(BaseHTTPRequestHandler):
             self._send(404, "Not Found", "text/plain")
 
     def _serve_json(self) -> None:
-        result = collect_status(self._runs_dir, self._now)
+        result = collect_status(self._runs_dir, datetime.now(timezone.utc))
         self._send(200, json.dumps(result, indent=2), "application/json; charset=utf-8")
 
     def _serve_html(self) -> None:
         import html as _html
 
-        result = collect_status(self._runs_dir, self._now)
+        result = collect_status(self._runs_dir, datetime.now(timezone.utc))
         current = result["current"]
 
         if current:
@@ -285,7 +285,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     handler: type[_StatusHandler] = type(
         "_StatusHandler",
         (_StatusHandler,),
-        {"_runs_dir": runs_dir, "_now": datetime.now(timezone.utc)},
+        {"_runs_dir": runs_dir},
     )
 
     server = ThreadingHTTPServer((host, port), handler)
