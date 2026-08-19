@@ -31,6 +31,12 @@ DEFAULT_PORT = 8765
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _parse_now(text: str) -> datetime:
+    """Parse an ISO-8601 datetime, treating naive datetimes as UTC."""
+    dt = datetime.fromisoformat(text)
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 def _port_number(text: str) -> int:
     """Validate a port number in the range 0..65535."""
     value = int(text)
@@ -73,6 +79,8 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
     """
     if now is None:
         now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
 
     running: list[dict[str, Any]] = []
     recent: list[dict[str, Any]] = []
@@ -303,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="_runs",
         help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
     )
-    st.add_argument("--now", type=datetime.fromisoformat, help="pin the current time as ISO-8601 (for tests)")
+    st.add_argument("--now", type=_parse_now, help="pin the current time as ISO-8601 (for tests)")
     st.set_defaults(func=_cmd_status)
 
     sv = sub.add_parser("serve", help="run a loopback HTTP server")

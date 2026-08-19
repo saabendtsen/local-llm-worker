@@ -278,6 +278,14 @@ class CollectStatusTests(unittest.TestCase):
         self.assertEqual(result["recent"], [])
         self.assertFalse(gone.exists())
 
+    def test_naive_now_treated_as_utc(self) -> None:
+        """Naive --now datetime (no tzinfo) with offset-aware started_at → no TypeError, correct duration."""
+        naive_now = datetime(2026, 8, 19, 10, 5, 0)  # tzinfo is None
+        _write_started(self.runs, "naive", "task", "Naive now task",
+                       "2026-08-19T10:00:00+00:00")
+        result = collect_status(self.runs, naive_now)
+        self.assertEqual(result["current"]["duration_seconds"], 300.0)
+
 
 # ---------------------------------------------------------------------------
 # CLI through subprocess
@@ -365,6 +373,24 @@ class CliTests(unittest.TestCase):
         self.assertIn("--now", proc.stderr)
         self.assertNotIn("Traceback", proc.stderr)
         self.assertIn("invalid", proc.stderr.lower())
+
+    def test_status_naive_now(self) -> None:
+        """Naive --now (no offset) treated as UTC → exit 0, correct duration."""
+        _write_started(self.runs, "n", "task", "Naive now CLI",
+                       "2026-08-19T10:00:00+00:00")
+        proc = _run_cli(["status", "--now", "2026-08-19T10:05:00"], self.runs)
+        self.assertEqual(proc.returncode, 0)
+        data = json.loads(proc.stdout)
+        self.assertEqual(data["current"]["duration_seconds"], 300.0)
+
+    def test_status_aware_now(self) -> None:
+        """Aware --now (+00:00) → exit 0, correct duration (unchanged path)."""
+        _write_started(self.runs, "a", "task", "Aware now CLI",
+                       "2026-08-19T10:00:00+00:00")
+        proc = _run_cli(["status", "--now", "2026-08-19T10:05:00+00:00"], self.runs)
+        self.assertEqual(proc.returncode, 0)
+        data = json.loads(proc.stdout)
+        self.assertEqual(data["current"]["duration_seconds"], 300.0)
 
     # -- invalid port
 
