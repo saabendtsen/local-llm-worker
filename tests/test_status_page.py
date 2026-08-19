@@ -197,6 +197,55 @@ class CollectStatusTests(unittest.TestCase):
         result = collect_status(self.runs, self.now)
         self.assertIn("arr", result["unreadable"])
 
+    # -- unreadable terminal file --
+
+    def test_unreadable_terminal_array(self) -> None:
+        """started.json valid, run.json = [1,2,3] → unreadable only, not running."""
+        _write_started(self.runs, "b", "task", "B", "2026-08-19T09:00:00+00:00")
+        (self.runs / "b" / "run.json").write_text("[1, 2, 3]", encoding="utf-8")
+        result = collect_status(self.runs, self.now)
+        self.assertIn("b", result["unreadable"])
+        self.assertEqual(result["unreadable"].count("b"), 1)
+        self.assertEqual(result["running"], [])
+        self.assertEqual(result["recent"], [])
+        self.assertIsNone(result["current"])
+
+    def test_unreadable_terminal_truncated(self) -> None:
+        """started.json valid, run.json truncated → unreadable only."""
+        _write_started(self.runs, "bt", "task", "B truncated", "2026-08-19T09:00:00+00:00")
+        (self.runs / "bt" / "run.json").write_text('{"recorded_at": ', encoding="utf-8")
+        result = collect_status(self.runs, self.now)
+        self.assertIn("bt", result["unreadable"])
+        self.assertEqual(result["unreadable"].count("bt"), 1)
+        self.assertEqual(result["running"], [])
+        self.assertEqual(result["recent"], [])
+        self.assertIsNone(result["current"])
+
+    def test_unreadable_terminal_next_to_running(self) -> None:
+        """Unreadable-terminal dir next to a genuine running run → running works."""
+        _write_started(self.runs, "u", "task", "Unreadable", "2026-08-19T09:00:00+00:00")
+        (self.runs / "u" / "run.json").write_text("[1, 2, 3]", encoding="utf-8")
+        _write_started(self.runs, "g", "task", "Good", "2026-08-19T10:00:00+00:00")
+        now = datetime(2026, 8, 19, 10, 5, 30, tzinfo=timezone.utc)
+        result = collect_status(self.runs, now)
+        self.assertIn("u", result["unreadable"])
+        self.assertEqual(result["current"]["task_id"], "g")
+        self.assertEqual(result["current"]["duration_seconds"], 330.0)
+        self.assertEqual(len(result["running"]), 1)
+
+    def test_unreadable_terminal_next_to_finished(self) -> None:
+        """Unreadable-terminal dir next to a finished run → finished works."""
+        _write_started(self.runs, "u", "task", "Unreadable", "2026-08-19T09:00:00+00:00")
+        (self.runs / "u" / "run.json").write_text("[1, 2, 3]", encoding="utf-8")
+        run_dir = _write_started(self.runs, "ft", "task", "Finished task", "2026-08-19T10:00:00+00:00")
+        _write_terminal(run_dir, "run.json", "2026-08-19T10:06:32+00:00")
+        result = collect_status(self.runs, self.now)
+        self.assertIn("u", result["unreadable"])
+        self.assertEqual(len(result["recent"]), 1)
+        self.assertEqual(result["recent"][0]["task_id"], "ft")
+        self.assertEqual(result["recent"][0]["duration_seconds"], 392.0)
+        self.assertIsNone(result["current"])
+
     # -- ignored --
 
     def test_no_started_json(self) -> None:

@@ -93,26 +93,16 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
                 unreadable.append(entry.name)
             continue
 
-        # Find the terminal file for this run.
-        terminal_file: Path | None = None
-        terminal_data: dict[str, Any] | None = None
-        for tf_name in TERMINAL_FILES:
-            tf_path = entry / tf_name
-            if tf_path.exists():
-                data = _read_json_object(tf_path)
-                if data is not None:
-                    terminal_file = tf_path
-                    terminal_data = data
-                    break
-                else:
-                    # File exists but is not a valid JSON object → unreadable.
-                    unreadable.append(entry.name)
-                    break
-        else:
-            terminal_file = None
-            terminal_data = None
+        # Find the first existing terminal file.
+        terminal_path = next((entry / n for n in TERMINAL_FILES if (entry / n).exists()), None)
 
-        if terminal_file is not None:
+        if terminal_path is not None:
+            terminal_data = _read_json_object(terminal_path)
+            if terminal_data is None:
+                # Terminal file exists but is not a valid JSON object → unreadable.
+                unreadable.append(entry.name)
+                continue
+
             # Finished run — build the record and compute duration from the
             # data in the files, not from the live clock.
             try:
