@@ -1,0 +1,8 @@
+{
+  "kind": "review",
+  "task_id": "rv3-error-paths",
+  "title": "Review of worker/f03-status-page (review-focus-error-paths)",
+  "started_at": "2026-08-19T15:41:11+00:00",
+  "branch": "worker/f03-status-page",
+  "axis": "review-focus-error-paths"
+}

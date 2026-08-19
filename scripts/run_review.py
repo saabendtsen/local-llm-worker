@@ -31,7 +31,10 @@ from run_task import (
     git,
     parse_task,
     prompt_delivery,
+    IDLE_TIMEOUT_DEFAULT,
+    PROCESS_RULES,
     summarise_events,
+    wait_for_harness,
     write_started,
 )
 
@@ -45,6 +48,7 @@ REVIEW_PROMPT = PROMPTS_DIR / "review-diff.md"
 # failure surfaces as "FileNotFoundError: [WinError 206] The filename or
 # extension is too long", which names neither the prompt nor the diff.
 MAX_PROMPT_CHARS = 30000
+
 
 
 def build_prompt(spec_body: str, base: str, branch: str, diff_path: Path,
@@ -67,6 +71,7 @@ def build_prompt(spec_body: str, base: str, branch: str, diff_path: Path,
         f"Get the diff with either:\n\n"
         f"- `git diff {base}...HEAD` — run it yourself, or\n"
         f"- read the file `{diff_path}`, which holds the same diff.\n\n"
+        f"{PROCESS_RULES}\n"
         f"---\n\n"
         f"## The task specification the change was meant to satisfy\n\n"
         f"{spec_body}\n"
@@ -90,6 +95,7 @@ def main() -> int:
              "from parallel subagents.",
     )
     parser.add_argument("--timeout", type=int, default=3600)
+    parser.add_argument("--idle-timeout", type=int, default=IDLE_TIMEOUT_DEFAULT)
     args = parser.parse_args()
 
     run_dir = RUNS_DIR / args.id
@@ -170,13 +176,8 @@ def main() -> int:
                 cmd, cwd=worktree, stdout=events, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", env=env,
             )
-            try:
-                _, stderr = process.communicate(timeout=args.timeout)
-                timed_out = False
-            except subprocess.TimeoutExpired:
-                process.kill()
-                _, stderr = process.communicate()
-                timed_out = True
+            stderr, timed_out, idle_timed_out = wait_for_harness(
+                process, events_path, args.timeout, args.idle_timeout)
         elapsed = round(time.monotonic() - started, 1)
 
         events = summarise_events(events_path)
@@ -210,6 +211,8 @@ def main() -> int:
             "model": args.model,
             "elapsed_seconds": elapsed,
             "timed_out": timed_out,
+
+            "idle_timed_out": idle_timed_out,
             "exit_code": process.returncode,
             "events": events,
             "prompt_delivery": delivery,

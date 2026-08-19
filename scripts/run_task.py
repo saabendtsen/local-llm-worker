@@ -33,6 +33,22 @@ EVENT_TOOL = "tool_execution_end"
 class TaskError(RuntimeError):
     """A problem with the task definition or the repository it targets."""
 
+# Appended to every worker and review prompt. The first review of a change that contained an
+# HTTP server (f03) started that server from bash "in the background"; the tool
+# waits for the process group, the server never exits, and the review hung for
+# its full hour and reported nothing. The rule is harness-level because it is
+# about the tool, not about any one review axis.
+PROCESS_RULES = """## Tool rules
+
+- **Never start a process that does not exit on its own** -- a server, a watcher, anything with
+  `serve`, `--watch`, or a `while True:` loop. The bash tool waits for the whole process group, so
+  `&` does not detach it and the call hangs until the run is killed. Exercise such code only
+  through its test suite, or through a Python snippet that starts it in a thread and shuts it down
+  in the same snippet. If you are about to type a command that would still be running a minute
+  later, do not run it.
+- Run the test suite and short one-off commands freely; nothing else.
+"""
+
 
 def parse_task(path: Path) -> tuple[dict[str, str], str]:
     """Split a task file into its frontmatter fields and its prompt body.
@@ -212,8 +228,58 @@ def _npm_global_roots() -> list[Path]:
 NO_SHELL_TOOLS = "read,edit,write,grep,find,ls"
 
 
+IDLE_TIMEOUT_DEFAULT = 900
+
+
+def kill_tree(process: subprocess.Popen) -> None:
+    """Kill the harness and everything it started.
+
+    `process.kill()` alone leaves grandchildren alive: when a reviewer started
+    an HTTP server from bash, killing Pi left two `serve` processes running
+    until someone noticed. On Windows `taskkill /T` walks the tree.
+    """
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                       capture_output=True, check=False)
+    process.kill()
+
+
+def wait_for_harness(process: subprocess.Popen, events_path: Path, timeout: int,
+                     idle_timeout: int = IDLE_TIMEOUT_DEFAULT) -> tuple[str, bool, bool]:
+    """Wait for the harness, enforcing both an overall and an *inactivity* limit.
+
+    Returns (stderr, timed_out, idle_timed_out). The event stream grows on
+    every token the model emits, so a file that has not changed for
+    `idle_timeout` seconds means the harness is stuck on a tool call that will
+    never return -- a server started "in the background", typically -- and no
+    amount of further waiting helps. The first such hang cost a full hour of
+    the overall timeout and reported nothing; this turns it into fifteen minutes
+    and an honest `idle_timed_out: true`.
+    """
+    deadline = time.monotonic() + timeout
+    last_size = -1
+    last_change = time.monotonic()
+    while True:
+        try:
+            _, stderr = process.communicate(timeout=10)
+            return stderr, False, False
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        size = events_path.stat().st_size if events_path.exists() else 0
+        if size != last_size:
+            last_size, last_change = size, now
+        overall = now >= deadline
+        idle = now - last_change >= idle_timeout
+        if overall or idle:
+            kill_tree(process)
+            _, stderr = process.communicate()
+            return stderr, overall, idle
+
+
 def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: int,
-               allow_shell: bool = True, harness: str = "pi") -> dict:
+               allow_shell: bool = True, harness: str = "pi",
+               idle_timeout: int = IDLE_TIMEOUT_DEFAULT) -> dict:
     """Run the chosen harness headless, streaming its JSON events to disk.
 
     Both harnesses take the same flags because little-coder *is* Pi underneath —
@@ -240,7 +306,6 @@ def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: 
     cmd += ["-p", prompt]
 
     started = time.monotonic()
-    timed_out = False
 
     with events_path.open("w", encoding="utf-8") as events:
         process = subprocess.Popen(
@@ -253,17 +318,14 @@ def run_worker(repo: Path, prompt: str, model: str, events_path: Path, timeout: 
             errors="replace",
             env=env,
         )
-        try:
-            _, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            _, stderr = process.communicate()
-            timed_out = True
+        stderr, timed_out, idle_timed_out = wait_for_harness(
+            process, events_path, timeout, idle_timeout)
 
     return {
         "elapsed_seconds": round(time.monotonic() - started, 1),
         "exit_code": process.returncode,
         "timed_out": timed_out,
+        "idle_timed_out": idle_timed_out,
         "stderr_tail": (stderr or "").strip()[-2000:],
     }
 
@@ -479,6 +541,9 @@ def main() -> int:
     )
     parser.add_argument("--branch", help="override the work branch name")
     parser.add_argument("--timeout", type=int, default=3600, help="worker timeout in seconds")
+    parser.add_argument("--idle-timeout", type=int, default=IDLE_TIMEOUT_DEFAULT,
+                        help="kill the worker when its event stream has not grown for this "
+                             "many seconds -- a stuck tool call, not a slow model")
     parser.add_argument("--verify-timeout", type=int, default=900)
     parser.add_argument(
         "--no-shell",
@@ -496,6 +561,7 @@ def main() -> int:
 
     try:
         meta, prompt = parse_task(args.task)
+        prompt = f"{prompt}\n\n{PROCESS_RULES}"
     except TaskError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
@@ -566,7 +632,8 @@ def main() -> int:
     print()
     print("running worker...")
     worker = run_worker(repo, prompt, args.model, run_dir / "events.jsonl", args.timeout,
-                        allow_shell=allow_shell, harness=args.harness)
+                        allow_shell=allow_shell, harness=args.harness,
+                        idle_timeout=args.idle_timeout)
 
     # Keep the exact prompt beside the evidence. The task file may be edited
     # later; this is what was actually sent, so a run stays reproducible and
