@@ -634,6 +634,9 @@ def main() -> int:
     parser.add_argument("--spec", type=Path, required=True,
                         help="the task file the reviewed branch answered")
     parser.add_argument("--branch", required=True, help="the reviewed branch")
+    parser.add_argument("--base", default=None,
+                        help="diff base; defaults to the spec frontmatter. Needed once the branch "
+                             "has been merged and the spec base no longer differs from it")
     parser.add_argument("--id", required=True, help="names the run directory")
     parser.add_argument("--frontier", required=True,
                         help="claude | codex | cmd:<shell template, prompt on stdin>")
@@ -662,7 +665,7 @@ def main() -> int:
 
     repo = args.repo.resolve()
     meta, spec_body = parse_task(args.spec)
-    base = meta.get("base", "experiment/74-local-llm-worker")
+    base = args.base or meta.get("base", "experiment/74-local-llm-worker")
     prefix = args.task_prefix or meta["id"]
 
     payload = json.loads(args.findings.read_text(encoding="utf-8-sig"))
