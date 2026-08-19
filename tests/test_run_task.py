@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from run_task import task_title, write_started  # noqa: E402
+from run_task import RUNS_DIR, is_runner_artifact, task_title, write_started  # noqa: E402
 
 
 class TaskTitleTests(unittest.TestCase):
@@ -38,6 +38,22 @@ class WriteStartedTests(unittest.TestCase):
         self.assertEqual(record["branch"], "worker/f03")
         # ISO-8601 with an explicit offset, so a reader can subtract it from now.
         self.assertRegex(record["started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+
+
+class RunnerArtifactTests(unittest.TestCase):
+    """Files the harness makes must not be staged as the worker's work (f03)."""
+
+    def test_run_directory_files_are_artifacts(self):
+        repo = RUNS_DIR.parent.parent
+        self.assertTrue(is_runner_artifact(repo, "evaluation/runs/f03/prompt.txt"))
+
+    def test_pycache_is_an_artifact_anywhere(self):
+        self.assertTrue(is_runner_artifact(Path("C:/elsewhere"), "scripts/__pycache__/x.pyc"))
+
+    def test_ordinary_source_is_not(self):
+        repo = RUNS_DIR.parent.parent
+        self.assertFalse(is_runner_artifact(repo, "scripts/status_page.py"))
+        self.assertFalse(is_runner_artifact(Path("C:/elsewhere"), "evaluation/runs/x/prompt.txt"))
 
 
 if __name__ == "__main__":

@@ -409,10 +409,32 @@ def stage_worker_changes(repo: Path, preexisting: set[str]) -> list[str]:
     separately.
     """
     git(repo, "add", "-u")
-    created = sorted(existing_untracked(repo) - preexisting)
+    created = sorted(
+        name for name in existing_untracked(repo) - preexisting
+        if not is_runner_artifact(repo, name)
+    )
     for name in created:
         git(repo, "add", "--", name)
     return created
+
+
+def is_runner_artifact(repo: Path, name: str) -> bool:
+    """True for files the harness itself produced, which must never be staged as
+    the worker's work.
+
+    When the repository under test is this one (f03 was the first), the run
+    directory and Python's bytecode caches are new untracked files by the time
+    the worker finishes, and were committed onto the worker's branch as if it had
+    written them. The run directory is evidence about the run, not part of it.
+    """
+    path = (repo / name).resolve()
+    if "__pycache__" in path.parts:
+        return True
+    try:
+        path.relative_to(RUNS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def diff_stats(repo: Path, created: list[str]) -> dict:

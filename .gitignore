@@ -27,3 +27,7 @@ sandbox/**/package-lock.json
 # GitHub's file limit. scripts/distill_events.py writes events-distilled.jsonl
 # alongside, which keeps every event the evaluation reads at ~7% of the size.
 evaluation/runs/**/events.jsonl
+
+# Python bytecode
+__pycache__/
+*.pyc
