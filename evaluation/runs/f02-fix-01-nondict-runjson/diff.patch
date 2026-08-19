@@ -1,0 +1,134 @@
+diff --git a/scripts/wayfinder_autopilot.py b/scripts/wayfinder_autopilot.py
+index 5a30d3c..0e5580b 100644
+--- a/scripts/wayfinder_autopilot.py
++++ b/scripts/wayfinder_autopilot.py
+@@ -862,6 +862,22 @@ def list_runs(config: AutopilotConfig, *, limit: int | None = None, states: list
+                     "metadata": str(metadata_path),
+                 })
+                 continue
++            if not isinstance(metadata, dict):
++                entries.append({
++                    "run_id": child.name,
++                    "state": "unreadable",
++                    "dry_run": None,
++                    "started_at": None,
++                    "finished_at": None,
++                    "duration_seconds": None,
++                    "exit_code": None,
++                    "error": "failed to parse run.json",
++                    "events": None,
++                    "stderr": None,
++                    "final_message": None,
++                    "metadata": str(metadata_path),
++                })
++                continue
+             started = metadata.get("started_at")
+             finished = metadata.get("finished_at")
+             duration: float | None = None
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index f401c50..90a032b 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -660,6 +660,82 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+         self.assertEqual("unreadable", entry["state"])
+         self.assertEqual("failed to parse run.json", entry["error"])
+ 
++    def test_list_runs_handles_list_json(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps([1, 2, 3]),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        entry = result["runs"][0]
++        self.assertEqual("unreadable", entry["state"])
++        self.assertEqual("failed to parse run.json", entry["error"])
++
++    def test_list_runs_handles_string_json(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps("a string"),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        entry = result["runs"][0]
++        self.assertEqual("unreadable", entry["state"])
++        self.assertEqual("failed to parse run.json", entry["error"])
++
++    def test_list_runs_handles_number_json(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps(42),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        entry = result["runs"][0]
++        self.assertEqual("unreadable", entry["state"])
++        self.assertEqual("failed to parse run.json", entry["error"])
++
++    def test_list_runs_handles_valid_run_beside_non_dict(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        # valid run
++        valid_id = "20260818T120000-000000"
++        (runs_dir / valid_id).mkdir()
++        (runs_dir / valid_id / "run.json").write_text(
++            json.dumps({"run_id": valid_id, "state": "completed"}),
++            encoding="utf-8",
++        )
++        # non-dict run
++        bad_id = "20260817T120000-000000"
++        (runs_dir / bad_id).mkdir()
++        (runs_dir / bad_id / "run.json").write_text(
++            json.dumps([1, 2, 3]),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(2, len(result["runs"]))
++        self.assertEqual(valid_id, result["runs"][0]["run_id"])
++        self.assertEqual("completed", result["runs"][0]["state"])
++        self.assertEqual(bad_id, result["runs"][1]["run_id"])
++        self.assertEqual("unreadable", result["runs"][1]["state"])
++
+     def test_list_runs_reports_artifact_paths(self):
+         runs_dir = self.logs / "runs"
+         runs_dir.mkdir(parents=True)
+@@ -946,6 +1022,19 @@ class HistoryCLIIntegrationTests(unittest.TestCase):
+         states = {r["state"] for r in data["runs"]}
+         self.assertIn("unreadable", states)
+ 
++    def test_cli_history_non_dict_run_json_exits_0(self):
++        rd = self.runs_dir / "20260821T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps([1, 2, 3]),
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        states = {r["state"] for r in data["runs"]}
++        self.assertIn("unreadable", states)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

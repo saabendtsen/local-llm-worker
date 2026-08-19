@@ -1,0 +1,61 @@
+diff --git a/scripts/wayfinder_autopilot.py b/scripts/wayfinder_autopilot.py
+index 0e5580b..32180cd 100644
+--- a/scripts/wayfinder_autopilot.py
++++ b/scripts/wayfinder_autopilot.py
+@@ -856,6 +856,7 @@ def list_runs(config: AutopilotConfig, *, limit: int | None = None, states: list
+                     "duration_seconds": None,
+                     "exit_code": None,
+                     "error": "failed to parse run.json",
++                    "abandoned": None,
+                     "events": None,
+                     "stderr": None,
+                     "final_message": None,
+@@ -872,6 +873,7 @@ def list_runs(config: AutopilotConfig, *, limit: int | None = None, states: list
+                     "duration_seconds": None,
+                     "exit_code": None,
+                     "error": "failed to parse run.json",
++                    "abandoned": None,
+                     "events": None,
+                     "stderr": None,
+                     "final_message": None,
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index 90a032b..7bbcbed 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -822,18 +822,25 @@ Path(args[args.index('-o') + 1]).write_text('done', encoding='utf-8')
+             }),
+             encoding="utf-8",
+         )
++        # unreadable run
++        bad_id = "20260817T120000-000000"
++        bad_rd = runs_dir / bad_id
++        bad_rd.mkdir()
++        bad_rd.joinpath("run.json").write_text(
++            '{"run_id": "x", "state": "run',
++            encoding="utf-8",
++        )
+         result = list_runs(self.config)
+-        entry = result["runs"][0]
+-        required_keys = {
+-            "run_id", "state", "dry_run", "started_at", "finished_at",
+-            "duration_seconds", "exit_code", "error",
+-            "events", "stderr", "final_message", "metadata", "abandoned",
+-        }
+-        self.assertTrue(required_keys.issubset(entry.keys()))
+-        self.assertEqual(run_id, entry["run_id"])
+-        self.assertEqual("completed", entry["state"])
+-        self.assertTrue(entry["dry_run"])
+-        self.assertEqual(0, entry["exit_code"])
++        self.assertEqual(2, len(result["runs"]))
++        normal = next(e for e in result["runs"] if e["state"] == "completed")
++        unreadable = next(e for e in result["runs"] if e["state"] == "unreadable")
++        self.assertEqual(set(normal.keys()), set(unreadable.keys()))
++        self.assertIn("abandoned", unreadable)
++        self.assertIsNone(unreadable["abandoned"])
++        self.assertEqual(run_id, normal["run_id"])
++        self.assertEqual("completed", normal["state"])
++        self.assertTrue(normal["dry_run"])
++        self.assertEqual(0, normal["exit_code"])
+ 
+ 
+ def subprocess_result(returncode, stdout="", stderr=""):

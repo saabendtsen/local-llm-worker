@@ -61,6 +61,10 @@ behavioural finding it produced is recorded under [Findings](#findings).
 | 0007 | same, precise rerun | bugfix | 31 | passed | **void** | 994 s | contaminated base |
 | 0008 | same, scaffolded, clean base | bugfix | 8 | passed | **clean** | 210 s | correct, trap avoided, tests do not discriminate |
 | 0009 | same, precise, clean base | bugfix | 2 | passed(!) | **takeover** | 1378 s | no diff — reasoning runaway, `stop: length` at 32k tokens |
+| f02 | wayfinder `history` subcommand | feature-medium | — | passed | **minor repair** | 1397 s | +452, 154→172 tests, all required seams; 3 real defects + 3 test gaps found by review, see E8 |
+| f02-fix-01 | non-dict `run.json` | bugfix | 9 | passed | **clean** | 393 s | correct, in scope, duplicated sentinel dict |
+| f02-fix-02 | `abandoned` key on unreadable entries | bugfix | 8 | passed | **clean** | 314 s | fixed both duplicate sites unprompted |
+| f02-fix-03 | pin read-only constraint | tests | 14 | passed | **clean** | 250 s | snapshot test; mutation self-check done and independently confirmed |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.

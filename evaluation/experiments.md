@@ -664,7 +664,10 @@ constraint for this use.
 
 ## E7 — Can the worker review code usefully?
 
-**Status:** designed 2026-08-17, not yet run
+**Status:** run 2026-08-17/18; eight reviews scored in [e7-scoring.md](e7-scoring.md). Verdict: focused
+reviewers (one axis each, union of findings) clearly beat a broad one; zero false positives across
+eight reviews; findings need a triage filter before any fix step. The pipeline changes it earned
+are in [../docs/pipeline-design.md](../docs/pipeline-design.md).
 
 **Question.** Should the pipeline have the worker review its own output and fix findings *before*
 anything reaches the frontier model? That would move the most expensive remaining step — reading a
@@ -716,6 +719,148 @@ since it spawns parallel subagents. Score its findings against the frontier revi
 positives *and* the false positives are cheap to dismiss. If it produces plausible-but-wrong
 findings at any rate, the fix step must not be automatic — findings become a hint for the frontier
 reviewer rather than a work item for the worker.
+
+## E8 — The full pipeline on a fresh feature (f02)
+
+**Status:** run 2026-08-18/19, complete. Worked triage in [f02-triage.md](f02-triage.md); runs in
+`runs/f02-*` and `runs/rv2-*`.
+
+**Question.** E6 showed the worker builds real features; E7 showed fresh-context focused reviewers
+find real defects. Does the *whole chain* hold — implement → four focused reviews → aggregate →
+triage → bounded fix cycles — on a feature nobody has built before, and does the fix step make the
+code better rather than worse?
+
+**The task.** [`f02-wayfinder-history.md`](tasks/f02-wayfinder-history.md): a `history` subcommand
+for `scripts/wayfinder_autopilot.py` that reads back the `run.json` metadata the autopilot already
+writes but nothing reads. Written in the post-E6 template: seams under test named and `[REQUIRED]`,
+a cases table with a source of truth per row (`3605.0` across a UTC-offset change, `3.501` for the
+ordinary case — both verified by hand first), an out-of-scope list, and the read-only constraint
+stated explicitly. Base `experiment/74-local-llm-worker`, suite baseline 154 passed, ruff clean.
+
+**Predictions, recorded before the run.**
+1. Implementation lands green on the first try, with the `[REQUIRED]` seams covered — E6's
+   "left `main()` untested" failure was a template problem, not a model problem.
+2. The reviewers find something real that the implementation's own tests do not, and at least one
+   finding is a test gap rather than a defect.
+3. Triage cannot be mechanical: at least one finding will need a frontier model to read the source
+   before it becomes a task.
+4. Bounded fix tasks complete in scope, but "do not refactor" costs something visible.
+
+**Results.**
+
+### Implement — 23 min, green, all three seams covered
+
+| | |
+| --- | --- |
+| Elapsed | 1396.7 s |
+| Diff | +452 / −0, two files, no new files |
+| Suite | 154 → 172 passed, ruff clean |
+| Seams | CLI subprocess, pure `list_runs`, writer round-trip — all present |
+
+Prediction 1 held. Naming the seams and requiring them is what fixed E6's gap; the model did what
+the template asked, which is the pattern this project keeps re-finding.
+
+### Review — four focused axes, 11 findings, one false positive
+
+| Reviewer | Elapsed | Findings |
+| --- | --- | --- |
+| error-paths | 741 s | 2 |
+| consistency | 865 s | 2 |
+| test-strength | 1929 s | 4 — ran 7 mutations, restored |
+| missing-coverage | 557 s | 3 — listed 19 requirements, found 3 uncovered |
+
+Union, deduped on (file:line, axis): 11, no collisions. Severity: 3 high, 5 medium, 3 low; 9
+verified, 2 suspected.
+
+The new **missing-coverage** axis, built after E7, earned its place in its first outing: it was the
+only reviewer to notice the read-only constraint was untested, and it *proved* the gap by inserting
+a `mkdir` into `list_runs` and watching the suite pass. Nothing else in the project had found that
+class of defect before — it is invisible to anyone who reads the tests first, because everything
+present looks fine.
+
+**The first false positive of the project** arrived here: finding 11 claims `round()` on
+`duration_seconds` gives "variable JSON decimal precision". JSON numbers have no precision property;
+the claim is wrong. The reviewer self-rated it `low` / `suspected`, so either `--min-severity medium`
+or `--verified-only` would have dropped it before triage saw it. The confidence floor caught its own
+bad finding, unprompted. Prediction 2 held, and the false-positive rate across twelve reviews is now
+one in twenty-five findings, self-flagged.
+
+### Triage — one finding would have damaged working code
+
+Done by hand, recorded in full in [f02-triage.md](f02-triage.md). Finding 5's `problem:` line says
+`--state` uses `nargs="*"` and should use `action="append"`; line 835 of the source already reads
+`action="append"`. The reviewer described the state *after* its mutation as the state before. The
+finding is structurally perfect — verified, repro, correct severity — and wrong in the one field a
+mechanical converter would read. Converted blindly, the fix task would have instructed the worker to
+break working code. Prediction 3 held in the strongest form available.
+
+Dispositions: 3 fix (defects), 3 fix-test-only (correct code, unpinned), 1 defer, 2 drop. Three of
+the eight actionable findings were test gaps against correct code — the task shape for those is
+"pin the behaviour", never "fix the behaviour", and the triage prompt has to classify that
+explicitly.
+
+### Fix cycles — three run, three in scope, three green
+
+Each a bounded task in the template shape, each branching from the previous fix, each with the
+suite baseline stated so any other failure is a regression.
+
+| Cycle | Task | Elapsed | Diff | Suite | Notes |
+| --- | --- | --- | --- | --- | --- |
+| fix-01 | [non-dict `run.json`](tasks/f02-fix-01-nondict-runjson.md) | 393 s | +105, 2 files | 177 | type guard after `json.loads`; **duplicated** the unreadable-entry dict instead of sharing it |
+| fix-02 | [`abandoned` key on unreadable entries](tasks/f02-fix-02-abandoned-key.md) | 314 s | +20 / −11 | 177 | added `"abandoned": None` at **both** duplicate sites — the task named neither |
+| fix-03 | [pin read-only](tasks/f02-fix-03-readonly-test.md) | 250 s | +38, tests only | 178 | `rglob` snapshot before/after, set equality; **did the mutation self-check** |
+
+**fix-01** is prediction 4 in the concrete: told "do not refactor", the worker copied the sixteen-line
+sentinel dict rather than extracting a helper. Correct, in scope, untidy.
+
+**fix-02** is the counterweight: its task said nothing about two sites — it was written from the
+finding, before fix-01 had created the duplicate — and the worker found and fixed both. So the
+no-refactor constraint costs tidiness, not correctness. That is a better trade than I expected, and
+it means bounded fix tasks do not need to enumerate every site the previous fix might have spawned.
+
+**fix-03** is the result that matters most. The acceptance criteria said: *insert
+`runs_dir.mkdir(parents=True, exist_ok=True)` into `list_runs`, watch the test fail, remove it, and
+say in your summary that you did and what the failure was.* The worker's summary reads:
+
+> I temporarily inserted `runs_dir.mkdir(parents=True, exist_ok=True)` into `list_runs`. The test
+> **failed** with: `Items in the second set but not the first: logs, logs/runs` — confirming the
+> snapshot comparison catches the directory creation. I reverted the source and all 178 tests pass.
+
+I reproduced that independently in a throwaway worktree on `worker/f02-fix-03`: same insertion
+before `if runs_dir.is_dir():`, `1 failed, 1 passed`, same assertion text.
+`scripts/wayfinder_autopilot.py` is byte-identical between fix-02 and fix-03. The claim was true.
+
+E6's finding was that the worker *never* applies the mutation discipline unprompted — every suite
+it wrote was self-consistency. E8 says the discipline is available when the task writes it into the
+acceptance criteria, and the worker then performs it correctly and reports it honestly. **The gap
+was never capability. Nobody had asked.** That belongs in the task template, not in a hope.
+
+One caution from my own verification: my first attempt anchored the `mkdir` at the wrong line and
+silently proved nothing — a passing test that tested nothing, which is precisely the failure class
+this project keeps finding. Verify-don't-trust applies to the verifier too.
+
+### Not yet run
+
+Test-only fix tasks for findings 4/5/7 (merged: `--limit`/`--state` interaction and `--state`
+repeatability unpinned) and 8 (`places=2` too lenient for the `3.501` case); finding 6 (mixed
+`run_id` types in the sort) is a real, narrow defect also still open; finding 10 deferred (needs
+`datetime.now` mocking, low value); 9 and 11 dropped.
+
+### Verdict
+
+The chain holds. Every stage produced what the next stage needed, nothing wrong reached the code,
+and the one finding that would have done harm was caught at the stage designed to catch it — the
+frontier one. What E8 changes in the pipeline:
+
+1. **Triage is a frontier step with three rules** — verify every finding against source before
+   converting; classify defect vs test gap explicitly; merge across axes. The prompt is written
+   from [f02-triage.md](f02-triage.md), and the pipeline owns it and calls the model by CLI so the
+   model can change.
+2. **The mutation self-check goes into the template** for every test-adding task: name the
+   mutation, require the worker to run it, require the failure text in the summary. It costs about
+   a minute and turns "the test passes" into "the test discriminates".
+3. **Fix cycles stay bounded and sequential**, one finding per cycle, each branching from the last.
+   Three in a row held without drift; the remaining ones will tell whether it holds past three.
 
 ---
 

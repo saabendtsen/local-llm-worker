@@ -99,6 +99,10 @@ codebase already publishes.>
 
 - [ ] <Verifiable statement>
 - [ ] `<the verify command>` passes — the whole suite, not only the new tests
+- [ ] <For any task that adds a test: name the mutation that the test must catch —
+      "inserting X at Y makes the new test fail" — and require the worker to run it, restore the
+      source, and quote the failure text in its summary. E8 showed the worker does this correctly
+      and honestly when asked, and never when not asked.>
 - [ ] Return a concise summary of what was modified and anything left unresolved.
 
 ## Notes

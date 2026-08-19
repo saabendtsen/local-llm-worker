@@ -1,0 +1,49 @@
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index 7bbcbed..c94d9c8 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -519,6 +519,44 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+         self.assertEqual("ok", result["state"])
+         self.assertEqual([], result["runs"])
+ 
++    def test_history_is_strictly_read_only(self):
++        """list_runs must not create the log directory, runs directory, or run.lock."""
++        # Ensure log_dir does not exist at all before calling list_runs
++        self.assertFalse(self.logs.exists())
++
++        # Snapshot all paths under the temporary root before calling list_runs
++        def _paths(root: Path) -> frozenset[Path]:
++            if not root.exists():
++                return frozenset()
++            return frozenset(p for p in root.rglob("*"))
++
++        before = _paths(self.root)
++
++        result = list_runs(self.config)
++
++        after = _paths(self.root)
++
++        # Nothing should have been created on disk
++        self.assertEqual(
++            before,
++            after,
++            "list_runs created unexpected paths on disk",
++        )
++        self.assertEqual("ok", result["state"])
++        self.assertEqual([], result["runs"])
++        self.assertFalse(
++            self.logs.exists(),
++            "log_dir must not be created by history",
++        )
++        self.assertFalse(
++            (self.logs / "runs").exists(),
++            "runs/ must not be created by history",
++        )
++        self.assertFalse(
++            (self.logs / "run.lock").exists(),
++            "run.lock must not be created by history",
++        )
++
+     def test_list_runs_ignores_non_directory_entries_in_runs(self):
+         runs_dir = self.logs / "runs"
+         runs_dir.mkdir(parents=True)

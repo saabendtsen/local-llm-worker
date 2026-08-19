@@ -1,0 +1,51 @@
+{
+  "task_id": "f02-fix-01-nondict-runjson",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-19T04:25:33+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/f02-fix-01",
+  "base_commit": "f61c648a2a87b6b61d8bf7f1236980921e512408",
+  "work_commit": "805919bd6abf796553c64630eae9c9a2d126de13",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f02-fix-01-nondict-runjson.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 392.6,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 2758,
+    "received_chars": 2758,
+    "reason": null
+  },
+  "events": {
+    "turns": 9,
+    "tool_calls": 9,
+    "tools_used": {
+      "edit": 4,
+      "bash": 3,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 105,
+    "lines_removed": 0,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m ruff check scripts tests && python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": "All checks passed!\n.................................................................... [ 38%]\n................................................................. [ 75%]\n............................................                             [100%]\n177 passed, 11 subtests passed in 26.97s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}
