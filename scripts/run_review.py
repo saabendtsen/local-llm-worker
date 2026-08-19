@@ -32,6 +32,7 @@ from run_task import (
     parse_task,
     prompt_delivery,
     summarise_events,
+    write_started,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -114,6 +115,8 @@ def main() -> int:
         return 2
 
     run_dir.mkdir(parents=True)
+    write_started(run_dir, "review", args.id, f"Review of {args.branch} ({args.prompt})",
+                  branch=args.branch, axis=args.prompt)
     git(repo, "worktree", "add", "--detach", str(worktree), args.branch)
     print(f"review  : {args.id}")
     print(f"branch  : {args.branch} (base {base})")

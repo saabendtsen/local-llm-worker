@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,31 @@ def parse_task(path: Path) -> tuple[dict[str, str], str]:
             raise TaskError(f"{path.name}: frontmatter is missing '{required}'")
 
     return meta, body.strip()
+
+
+def task_title(body: str, fallback: str) -> str:
+    """The task's heading, without the leading '# Task:' -- what a status page shows."""
+    for line in body.splitlines():
+        if line.startswith("# "):
+            return re.sub(r"^#\s*(Task:\s*)?", "", line).strip() or fallback
+    return fallback
+
+
+def write_started(run_dir: Path, kind: str, task_id: str, title: str, **extra: object) -> None:
+    """Mark a run as in progress the moment its directory exists.
+
+    Every other file in a run directory is written when the run ends (run.json,
+    review.json, triage.json), so without this marker nothing says what is
+    running now, or since when. The status page reads it; nothing else does.
+    """
+    record = {
+        "kind": kind,
+        "task_id": task_id,
+        "title": title,
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **extra,
+    }
+    (run_dir / "started.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
@@ -501,6 +527,8 @@ def main() -> int:
         print(f"base   : {base} ({base_commit[:7]})")
 
     run_dir.mkdir(parents=True)
+    write_started(run_dir, "task", task_id, task_title(prompt, task_id),
+                  category=meta["category"], branch=branch, harness=args.harness)
     print(f"task   : {task_id} ({meta['category']})")
     print(f"repo   : {repo}")
     print(f"branch : {branch}")
