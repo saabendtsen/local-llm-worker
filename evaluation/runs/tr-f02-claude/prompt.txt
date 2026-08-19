@@ -1,0 +1,1029 @@
+# Triage Task — turn review findings into bounded fix tasks
+
+You are the **triage step** of a review pipeline. Several focused reviewers have each examined one
+branch through one lens (error paths, consistency, test strength, missing coverage) and a script
+has deduplicated and ordered their findings. You receive that list, the task specification the
+branch was meant to satisfy, and the branch's diff. The repository is checked out **read-only** at
+the branch tip, so every cited file and line is there to read.
+
+**Your only job: decide which findings become fix tasks, write those tasks, and order them.**
+
+You do not fix anything. You do not re-review the diff for new defects. You do not rewrite findings
+you disagree with into something else — you drop them and say why.
+
+## Why this needs saying
+
+The tasks you write will be executed by a **small local model**. It does exactly what the task
+says, and nothing the task does not say. It will not notice that a task is wrong, it will not check
+whether the code already does what the task asks, and it will not stop itself from "fixing" working
+code if the task tells it to. Whatever ambiguity you leave, it resolves at random.
+
+So the quality of the whole pipeline is decided here, in three ways:
+
+1. **A finding's `problem` field is a claim, not a fact.** Reviewers mutation-test: they break the
+   code, watch the suite pass, and restore. Sometimes the finding describes the *mutated* state as
+   though it were the current one — the `mutation:` line says "changed A to B", the `problem:` line
+   says "the code uses B". Converted mechanically, that task would tell the worker to change working
+   code *into* the broken form. This has already happened once in this project. **Read the cited
+   lines before you write anything.**
+
+2. **A defect and a test gap produce completely different tasks.** A defect means *fix the
+   behaviour, and add the test that pins it*. A test gap against correct code means *add the test;
+   do not touch the implementation*. Telling the worker to "fix" correct code is how it gets broken.
+   Classify explicitly, every time, from what the source actually says.
+
+3. **The worker cannot infer scope.** A task has to name the files it may edit, state the suite
+   baseline so the worker can tell a regression from noise, enumerate the cases a test must cover
+   with a source of truth for each assertion, and — for a test-only task — name the mutation that
+   proves the test discriminates. Leave any of those out and the worker fills the gap with a guess.
+
+## The procedure
+
+Follow it in this order.
+
+**Step 1 — Read the specification and the diff.** Know what the branch was supposed to do and what
+it did. Run `git diff <base>...HEAD` or read the patch file if it is not inlined below.
+
+**Step 2 — Verify every finding against the source.** For each finding, open the cited file at the
+cited line (or find the symbol if the line has moved) and record what the code *currently* does.
+Then decide, from the source and not from the finding's prose:
+
+- **defect** — the current code is wrong in the way described (or a closely related way);
+- **test gap** — the current code is correct, but nothing in the test suite would fail if it were
+  broken the way the reviewer broke it;
+- **wrong** — the finding misreads the code, the format, or the specification.
+
+Write down what you read, with `file:line`. That text goes in the `verified` field and is the
+evidence that you looked.
+
+**Step 3 — Merge findings that are the same issue.** Reviewers on different axes often see one
+defect through different lenses and cite different files — a missing-coverage finding on the
+implementation and a test-strength finding on the test file can be the same gap. The aggregator
+cannot merge those because it keys on file and line; you can. Merge only when one task would
+honestly resolve all of them. Two findings that happen to touch the same function are not one
+issue. **Prefer one finding per task.**
+
+**Step 4 — Dispose of each finding** (every input finding must appear in exactly one disposition):
+
+- `fix` — a real defect. The task changes behaviour and adds the test that pins it.
+- `fix-test-only` — a real test gap against correct code. The task adds a test and **forbids
+  touching the implementation**.
+- `drop` — the finding is wrong, or already covered by an existing test (the reviewer's own
+  mutation result sometimes shows this: "other tests failed as expected"). Say why in one or two
+  sentences.
+- `defer` — real, but the fix is disproportionate to the value right now (needs mocking machinery
+  the suite does not have, cosmetic, depends on a design decision the spec left open). Say why.
+
+**Step 5 — Write each task.** Bounded, concrete, and in the voice of a brief to a junior who will
+not ask questions:
+
+- `files_allowed` — the exact paths the worker may edit. Usually the implementation file and its
+  test file for `fix`; the test file alone for `fix-test-only`.
+- `current_behavior` — what the code does now, quoting the offending line with its path and line
+  number when it is short. Include the finding's repro command if it has one.
+- `desired_behavior` — the outcome, not the edit sequence. Edge cases named.
+- `out_of_scope` — what must not change. Always include "do not address any other review finding".
+  For `fix-test-only`, always include that the implementation file must not be modified.
+- `cases` — the table the worker's tests must cover. For every case, a **source of truth**: a
+  literal, an existing test's assertion to reuse, a value the codebase publishes. Never a
+  self-consistency check.
+- `acceptance` — verifiable statements. Include that the verify command passes and that the
+  whole suite stays green, not only the new tests.
+- `mutation_check` — for `fix-test-only` only: the exact edit that must make the new test fail
+  ("insert X at Y"). The worker is required to make it, watch the test fail, restore, and quote
+  the failure in its summary. Name a mutation that proves the test discriminates, not one that
+  breaks everything.
+- `notes` — the conventions to follow, the existing test to copy the fixture style from, a known
+  gotcha. Things that would otherwise cost a detour.
+
+Keep `rationale` terse — one or two sentences. The `verified` field is where the evidence goes.
+
+**Step 6 — Order the tasks.** Real defects in user-facing paths first (a crash a user can hit
+beats a missing test), then remaining defects, then test gaps. Within a tier, smallest first. The
+tasks run sequentially and each is based on the previous one's branch, so an earlier task's test
+file changes are visible to later ones.
+
+## What to watch for especially
+
+- **Inverted problem statements** — compare `problem:` against `mutation:` and against the source.
+- **"Crash" findings that cite an exception** — check the exception is really uncaught on the
+  current branch, not already handled one line above the cited one.
+- **Severity inflation** — a `low`/`suspected` finding may still be right, and a `high`/`verified`
+  one may still be inverted. Read the code either way.
+- **Findings about a format or a library** — JSON has no decimal width; argparse `action="append"`
+  is repeatable. Check the claim against what the format or library actually does.
+- **Test-strength findings whose own `result:` shows other tests caught the mutation** — that is
+  usually a drop: the behaviour is pinned, just not by the test the reviewer was looking at.
+
+## Output contract
+
+Your reply must contain **exactly one** fenced code block tagged `json`, and it must parse as a
+single JSON object of this shape. Text outside the block is ignored; keep it to a sentence or two.
+
+```json
+{
+  "dispositions": [
+    {
+      "findings": [3],
+      "disposition": "fix",
+      "verified": "scripts/x.py:865 calls metadata.get() straight after json.loads(); the except at :868 catches only JSONDecodeError and OSError, so a JSON list reaches .get() and raises AttributeError.",
+      "rationale": "Real crash on a user-facing command.",
+      "task": {
+        "slug": "nondict-runjson",
+        "title": "handle a run.json that is valid JSON but not an object",
+        "category": "bugfix",
+        "complexity": "small",
+        "files_allowed": ["scripts/x.py", "tests/test_x.py"],
+        "current_behavior": "markdown — what happens now, with path:line and the repro command",
+        "desired_behavior": "markdown — the outcome",
+        "out_of_scope": ["Do not change ...", "Do not address any other review finding."],
+        "cases": [
+          {"case": "run.json containing [1, 2, 3]", "source_of_truth": "the same sentinel state the existing truncated-JSON test asserts — reuse that literal"}
+        ],
+        "acceptance": ["Every case above passes.", "The verify command passes — the whole suite, not only the new tests."],
+        "notes": ["Follow the module's conventions: ..."],
+        "mutation_check": null
+      }
+    },
+    {
+      "findings": [4, 7],
+      "disposition": "fix-test-only",
+      "verified": "scripts/x.py:902-904 applies the state filter before the limit slice, as the spec requires.",
+      "rationale": "Correct but unpinned; findings 4 and 7 are one gap seen from two axes.",
+      "task": {
+        "slug": "limit-state-ordering-test",
+        "title": "pin the --state-before---limit ordering with a test",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_x.py"],
+        "current_behavior": "...",
+        "desired_behavior": "...",
+        "out_of_scope": ["Do not modify scripts/x.py at all.", "Do not address any other review finding."],
+        "cases": [{"case": "...", "source_of_truth": "..."}],
+        "acceptance": ["..."],
+        "notes": ["..."],
+        "mutation_check": "swap the order of the `if states:` block and the `if limit is not None:` slice in list_runs"
+      }
+    },
+    {
+      "findings": [11],
+      "disposition": "drop",
+      "verified": "scripts/x.py:472 rounds to 3 places; JSON numbers carry no decimal width, so 3605.0 and 3605.000 are the same value.",
+      "rationale": "Misunderstands the format."
+    }
+  ],
+  "order": [0, 1],
+  "summary": "One sentence on what was found and what was dropped."
+}
+```
+
+Rules the validator enforces — an output that breaks any of them is rejected and sent back to you:
+
+- `dispositions` is a non-empty list. Each item has `findings` (non-empty list of the 1-based
+  finding indexes from the input), `disposition` (one of `fix`, `fix-test-only`, `defer`, `drop`),
+  `verified` (non-empty string naming what you read, with `file:line`), and `rationale`
+  (non-empty string).
+- **Every input finding index appears in exactly one disposition.** None missing, none twice, none
+  invented.
+- `task` is present **if and only if** the disposition is `fix` or `fix-test-only`. A `drop` or
+  `defer` must not carry a `task`.
+- Inside `task`: `slug` is kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`); `title` non-empty; `category`
+  is `bugfix` or `tests`; `complexity` is `small` or `medium`; `files_allowed` is a non-empty list
+  of repository-relative paths; `current_behavior` and `desired_behavior` are non-empty strings;
+  `out_of_scope`, `acceptance`, `notes` are lists of strings (`out_of_scope` and `acceptance`
+  non-empty); `cases` is a non-empty list of `{"case", "source_of_truth"}` objects with non-empty
+  strings.
+- `mutation_check` is a non-empty string when the disposition is `fix-test-only`, and `null` (or
+  absent) otherwise.
+- `order` lists the indexes (0-based, into `dispositions`) of every `fix`/`fix-test-only`
+  disposition, each exactly once, nothing else — this is the execution order.
+- `summary` is a non-empty string.
+
+Emit real JSON: double-quoted keys, no trailing commas, no comments. Put markdown inside string
+values if you want formatting in the rendered task.
+
+
+---
+
+## The branch under triage
+
+Branch `worker/f02-wayfinder-history`, based on `experiment/74-local-llm-worker`. The repository is checked out read-only at the
+branch tip, so every cited file and line is readable. Do not modify anything.
+
+---
+
+## The task specification the branch was meant to satisfy
+
+# Task: add a `history` subcommand to the Wayfinder autopilot
+
+**Edit `scripts/wayfinder_autopilot.py`.** Then **edit `tests/test_wayfinder_autopilot.py`**.
+
+## Current behavior
+
+The autopilot writes structured metadata for every run to `<log_dir>/runs/<run-id>/run.json`,
+alongside `events.jsonl`, `stderr.log` and `final.md`. It is written twice — once at start, once on
+completion (lines 698-705 and 739-744):
+
+```python
+metadata = {
+    "run_id": run_id,
+    "state": "running",
+    "dry_run": dry_run,
+    "started_at": datetime.now().astimezone().isoformat(),
+    "workspace": str(config.workspace),
+}
+...
+metadata.update(state=state, exit_code=exit_code,
+                finished_at=datetime.now().astimezone().isoformat())
+```
+
+**Nothing reads it back.** The `status` subcommand reports the Windows scheduled task and echoes
+the log directory path; it says nothing about what any run did. So the documented recovery
+procedure for an unattended coordinator is to open JSON files by hand under `%LOCALAPPDATA%`.
+
+## Desired behavior
+
+A `history` subcommand that lists past runs, newest first, as JSON on stdout.
+
+```
+python scripts/wayfinder_autopilot.py [--workspace DIR] [--config FILE] history [--limit N] [--state STATE ...]
+```
+
+The top-level object must carry a `state` key, because `main()` indexes `result["state"]` and maps
+it to the exit code. Each listed run reports at least: `run_id`, `state`, `dry_run`, `started_at`,
+`finished_at`, `duration_seconds`, `exit_code`, and the paths of its artifacts.
+
+`--state` filters by run state and is repeatable; it applies before `--limit`.
+
+## Key interfaces
+
+- `AutopilotConfig` — already resolves a relative `log_dir` against `--workspace` (lines 54-56), so
+  a test can point it at a temporary directory and never touch `%LOCALAPPDATA%`.
+- `build_parser()` (line 821) — where the subparser attaches, beside `run`, `dry-run`, `install`,
+  `status`, `uninstall`.
+- `main()` (lines 846-854) — prints `json.dumps(result, indent=2)` and returns
+  `0 if result["state"] not in {"failed", "timed_out"} else 1`. Its `except` clause catches
+  `json.JSONDecodeError` and returns 2.
+- `run_once` — the writer whose schema this reads. It creates `events.jsonl` only after the run
+  starts, so a run that fails early has a `run.json` and nothing else.
+
+## Seams under test
+
+- **`main()` through the command line** — argparse wiring, JSON on stdout, exit code. Invoke it as a
+  subprocess against a temporary workspace. `tests/test_dev_pc_ci.py` lines 15-21 show the `run_cli`
+  helper shape to copy.  **[REQUIRED]**
+- **The pure listing function** over a fixture `runs/` tree built by hand.  **[REQUIRED]**
+- **Round trip with the writer** — call `run_once` with the fake codex stub as
+  `tests/test_wayfinder_autopilot.py` lines 392-424 already do, then list, and assert the run it
+  just wrote appears with matching `run_id` and `state`.  **[REQUIRED]** This is the seam that
+  catches a reader written against an imagined schema rather than the real one.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| A crashed run: `state: "running"`, no `finished_at` | `duration_seconds` is `None`, and the state is the writer's own literal `"running"` from line 700 |
+| Duration across a UTC-offset change: started `2026-10-25T02:30:00+02:00`, finished `2026-10-25T02:30:05+01:00` | **`3605.0`** — verified by `datetime.fromisoformat` subtraction, not `5.0` |
+| An ordinary duration: `15:55:03.540718+02:00` to `15:55:07.041543+02:00` | **`3.501`** |
+| A truncated `run.json`, e.g. `{"run_id": "x", "state": "run` | process **exit code 0**, stdout parses as JSON, and that run is visible as unreadable. Contrast with the failure codes `main()` itself returns: 1 and 2 |
+| `log_dir` exists but has no `runs/` directory | `{"state": "ok", ..., "runs": []}`, exit 0 |
+| A stray `runs/notes.txt` beside two valid run directories | exactly the two runs listed, no entry for the file |
+| Ordering with `--limit 1` over run ids `20260816T...`, `20260817T...`, `20260818T...` | exactly the `20260818T...` run — assert against a hand-written ascending literal list, reversed |
+| Round trip | the writer's own keys: `run_id`, `state`, `dry_run`, `started_at`, `workspace`, `exit_code`, `finished_at`; and `run_id` matching `^\d{8}T\d{6}-\d+$`, the `strftime("%Y%m%dT%H%M%S-%f")` format at line 690 |
+
+## Out of scope
+
+- Do not change `run_once`, the metadata it writes, or any existing subcommand.
+- `history` is strictly read-only: it must not create the log directory, must not acquire
+  `RunLock`, and must not write anywhere.
+- Change no files other than the two named above.
+
+## Acceptance criteria
+
+- [ ] `history` lists runs newest first, with the fields above.
+- [ ] Every case in the table behaves as its source of truth requires.
+- [ ] No filesystem state above causes a traceback or a non-zero exit.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline is
+      **154 passed, 11 subtests passed**, and ruff currently reports **All checks passed** — so any
+      other failure is a regression introduced here.
+- [ ] Return a concise summary of what you built, the design choices you made and why, and anything
+      left unresolved.
+
+## Deliberately left to you
+
+More than one answer is defensible; none will be marked wrong for its own sake:
+
+- whether the top-level `state` is always `"ok"`, or reflects the newest run — note that `main()`
+  maps it to the exit code, so this choice is load-bearing;
+- whether unreadable runs appear inline with a sentinel state or in a separate list;
+- the sort key — `run_id` is fixed-width and therefore chronological, but `started_at` is more
+  explicit;
+- whether to read `final.md` for a one-line summary, or report metadata only;
+- whether absent artifacts are omitted or reported as `null`;
+- whether a long-running run is flagged as abandoned using the module's existing `timeout_seconds`
+  and `SCHEDULER_CLEANUP_GRACE_SECONDS`.
+
+## Notes
+
+- Parse timestamps with `datetime.fromisoformat`. `strptime` with a fixed format string mishandles
+  the offset, and string slicing silently gets the DST case wrong.
+- The `except` clause in `main()` catches `json.JSONDecodeError` and returns 2 — so a corrupt
+  `run.json` that escapes will not crash visibly, it will exit 2 and look like an ordinary error.
+  The test must assert exit **0** and the entry's presence, not merely "no traceback".
+- Module conventions: `from __future__ import annotations`, `SCREAMING_CASE` module constants,
+  functions returning plain `dict`, private helpers prefixed `_`, `pathlib` only, no third-party
+  imports.
+- Test conventions: `unittest.TestCase`, `sys.path.insert(0, str(ROOT / "scripts"))` then a flat
+  `from wayfinder_autopilot import (...)  # noqa: E402` — add the new symbol to that import list.
+  Fixtures in `setUp` with `tempfile.TemporaryDirectory()`, torn down in `tearDown`. The file ends
+  `if __name__ == "__main__": unittest.main()`.
+- Ruff runs with defaults, so an unused import in either file fails the acceptance command.
+
+---
+
+## The findings (11 total, 1-based `index`)
+
+```json
+[
+  {
+    "index": 1,
+    "source": "rv2-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/wayfinder_autopilot.py, `list_runs()` read-only behaviour",
+    "severity": "high",
+    "confidence": "verified",
+    "requirement": "\"history is strictly read-only: it must not create the log directory, must not acquire RunLock, and must not write anywhere.\"",
+    "gap": "The test `test_cli_history_no_runs_directory` verifies `{\"state\": \"ok\", \"runs\": []}` and exit 0, but does not assert that no filesystem state was created. I injected `runs_dir.mkdir(parents=True, exist_ok=True)` into `list_runs`. The test still passed because it only checks the JSON payload, not the filesystem. This means any accidental write in `list_runs` would silently pass the suite.",
+    "proof": "Added `runs_dir.mkdir(parents=True, exist_ok=True)` before the `is_dir()` guard in `list_runs`. Ran `test_cli_history_no_runs_directory` — test passed. Ran `test_list_runs_returns_empty_when_no_runs_dir` — also passed. Both tests check only the returned dict, never the filesystem. Restored original function.",
+    "found_by": [
+      "rv2-coverage"
+    ]
+  },
+  {
+    "index": 2,
+    "source": "rv2-consistency",
+    "axis": "consistency",
+    "file": "scripts/wayfinder_autopilot.py:498-509",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "unreadable-run entries omit the `\"abandoned\"` key that every normal entry includes",
+    "why": "The normal entry dict (line ~525) sets `\"abandoned\": is_abandoned`. The unreadable-entry dict (line ~498-509), built inside the `except (json.JSONDecodeError, OSError)` handler, has no `\"abandoned\"` key. A consumer iterating over `result[\"runs\"]` that contains both valid and unreadable entries cannot safely access `entry[\"abandoned\"]` without a `KeyError` guard. The test `test_list_runs_all_required_keys_present` asserts `abandoned` is a required key but only exercises the valid-entry path, so the gap goes uncaught.",
+    "repro": "Place a truncated `run.json` (e.g. `{\"run_id\": \"x\", \"state\": \"run`) in a `runs/` directory and call `list_runs()`. The resulting entry dict will lack the `\"abandoned\"` key while all other entries contain it.",
+    "evidence": "Normal entry keys include `\"abandoned\"`; unreadable entry keys do not. Verified by extracting both dicts from the source and computing set difference: `{'abandoned'}`.",
+    "found_by": [
+      "rv2-consistency"
+    ]
+  },
+  {
+    "index": 3,
+    "source": "rv2-errors",
+    "axis": "error-paths",
+    "file": "scripts/wayfinder_autopilot.py:865",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "`list_runs` crashes with unhandled `AttributeError` when `run.json` contains valid JSON that is not a dict.",
+    "why": "The code parses `run.json` with `json.loads()` then immediately calls `metadata.get(\"started_at\")`. When the JSON is a list, string, number, boolean, or `null`, this raises `AttributeError`, which is not caught by the existing `except (json.JSONDecodeError, OSError)` block. The traceback reaches the user and the process exits with code 1 instead of reporting the unreadable run.",
+    "repro": "`python scripts/wayfinder_autopilot.py --workspace <workspace> history` where `<workspace>/logs/runs/20260816T120000-000000/run.json` contains `[1, 2, 3]",
+    "evidence": "Traceback (most recent call last): File \".../wayfinder_autopilot.py\", line 940, in <module> raise SystemExit(main()) File \".../wayfinder_autopilot.py\", line 929, in main result = list_runs(config, limit=args.limit, states=states) File \".../wayfinder_autopilot.py\", line 865, in list_runs started = metadata.get(\"started_at\") ^^^^^^^^^^^^ AttributeError: 'list' object has no attribute 'get' EXIT: 1 (Same traceback for JSON string, `null`, `42`, `true`, `false`.)",
+    "found_by": [
+      "rv2-errors"
+    ]
+  },
+  {
+    "index": 4,
+    "source": "rv2-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/wayfinder_autopilot.py, `main()` history branch (`sorted(args.state)`) and `list_runs()` filter+limit ordering",
+    "severity": "medium",
+    "confidence": "verified",
+    "requirement": "\"--state filters by run state and is repeatable; it applies before --limit.\"",
+    "gap": "No test exercises `--state` and `--limit` together. The spec requires state filtering to happen before the limit slice, but the only tests pass each flag in isolation. When I swapped the order (limit before filter) and ran `--state failed --limit 1` against 4 runs (2 completed, 2 failed), the broken code returned 0 runs instead of the newest failed run (`20260819T...`). The suite still passed because no single-flag test depends on ordering.",
+    "proof": "Replaced `if states: ...; if limit is not None: ...` with `if limit is not None: ...; if states: ...` in `list_runs`. Ran `--state failed --limit 1` against a workspace with 3 completed + 1 failed run → stdout returned `{\"state\":\"ok\",\"runs\":[]}` (zero entries after limit consumed a non-failed run, then filter removed it). Restored original order.",
+    "found_by": [
+      "rv2-coverage"
+    ]
+  },
+  {
+    "index": 5,
+    "source": "rv2-tests",
+    "axis": "test-strength",
+    "file": "scripts/wayfinder_autopilot.py:838",
+    "severity": "medium",
+    "confidence": "verified",
+    "problem": "--state uses nargs=\"*\" instead of action=\"append\", breaking repeated --state flags",
+    "mutation": "Changed history_parser.add_argument(\"--state\", action=\"append\", default=None) to nargs=\"*\"",
+    "result": "42 passed",
+    "why": "With action=\"append\", --state A --state B produces [\"A\", \"B\"]. With nargs=\"*\", it produces [\"A\", \"--state\", \"B\"]. The \"--state\" literal enters the filter list as noise. The spec says --state is repeatable. No test exercises repeated --state flags. SUMMARY: test-strength=4 blocking=2 mutations-run=4 restored=yes",
+    "found_by": [
+      "rv2-tests"
+    ]
+  },
+  {
+    "index": 6,
+    "source": "rv2-errors",
+    "axis": "error-paths",
+    "file": "scripts/wayfinder_autopilot.py:901",
+    "severity": "medium",
+    "confidence": "verified",
+    "problem": "`list_runs` crashes with `TypeError` during sort when run entries have mixed `run_id` types.",
+    "why": "The sort key is `e[\"run_id\"]`. Valid entries may have a numeric `run_id` from the JSON, while unreadable entries use `child.name` (a string) as the fallback. Python 3 cannot compare `int` and `str`, so `entries.sort(...)` raises `TypeError`, which escapes to the user.",
+    "repro": "`python scripts/wayfinder_autopilot.py --workspace <workspace> history` where one run dir has `run.json` containing `{\"run_id\": 123, \"state\": \"completed\"}` and another has `run.json` containing `NOT JSON",
+    "evidence": "Traceback (most recent call last): File \".../wayfinder_autopilot.py\", line 940, in <module> raise SystemExit(main()) File \".../wayfinder_autopilot.py\", line 929, in main result = list_runs(config, limit=args.limit, states=states) File \".../wayfinder_autopilot.py\", line 901, in list_runs entries.sort(key=lambda e: e[\"run_id\"], reverse=True) ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ TypeError: '<' not supported between instances of 'int' and 'str' EXIT: 1 SUMMARY: error-paths=2 blocking=2 cases-tested=8",
+    "found_by": [
+      "rv2-errors"
+    ]
+  },
+  {
+    "index": 7,
+    "source": "rv2-tests",
+    "axis": "test-strength",
+    "file": "tests/test_wayfinder_autopilot.py:570-584",
+    "severity": "medium",
+    "confidence": "verified",
+    "problem": "test_list_runs_filters_by_state does not test limit+states interaction",
+    "mutation": "Swapped the order of state filter and limit slice in list_runs (limit applied before state filter instead of after)",
+    "result": "42 passed",
+    "why": "When --limit and --state are combined, applying limit before filtering produces wrong results. E.g., --limit 2 --state completed over 3 completed + 1 failed run gives 2 completed runs with correct order, but only 1 with swapped order. No test exercises both flags together.",
+    "found_by": [
+      "rv2-tests"
+    ]
+  },
+  {
+    "index": 8,
+    "source": "rv2-tests",
+    "axis": "test-strength",
+    "file": "tests/test_wayfinder_autopilot.py:586-606",
+    "severity": "medium",
+    "confidence": "verified",
+    "problem": "test_list_runs_computes_duration_for_completed_run uses places=2 which is too lenient for the 3.501 assertion",
+    "mutation": "Changed round((finish_dt - start_dt).total_seconds(), 3) to round(..., 2)",
+    "result": "42 passed",
+    "why": "Rounding to 2dp gives 3.5 instead of 3.501. The assertAlmostEqual with places=2 accepts differences < 0.005, so 0.001 passes silently. The test should use places=3 to enforce the 3-decimal precision the spec requires.",
+    "found_by": [
+      "rv2-tests"
+    ]
+  },
+  {
+    "index": 9,
+    "source": "rv2-tests",
+    "axis": "test-strength",
+    "file": "tests/test_wayfinder_autopilot.py:717-760",
+    "severity": "low",
+    "confidence": "verified",
+    "problem": "test_list_runs_all_required_keys_present does not assert on duration_seconds value",
+    "mutation": "Changed round((finish_dt - start_dt).total_seconds(), 3) to duration = 99999.0",
+    "result": "1 passed (the key-presence test itself passed; the two dedicated duration tests failed as expected)",
+    "why": "This test validates that all required keys are present and checks run_id/state/dry_run/exit_code, but duration_seconds is only checked for key presence, not value. A broken duration calculation that still produces a non-None float would slip past this test. Other tests catch the bug, but this specific test provides no discrimination on duration.",
+    "found_by": [
+      "rv2-tests"
+    ]
+  },
+  {
+    "index": 10,
+    "source": "rv2-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/wayfinder_autopilot.py, `list_runs()` abandoned-run branch",
+    "severity": "low",
+    "confidence": "suspected",
+    "requirement": "\"whether a long-running run is flagged as abandoned using the module's existing `timeout_seconds` and `SCHEDULER_CLEANUP_GRACE_SECONDS`\" (deliberately left to implementor, but code implements it)",
+    "gap": "The `abandoned` flag is computed in `list_runs` when a run's state is `\"running\"` and elapsed time exceeds `SCHEDULER_CLEANUP_GRACE_SECONDS` (300s). No test uses a `started_at` timestamp more than 300 seconds in the past with `state: \"running\"`. The existing `test_list_runs_running_run_has_none_duration` uses a future timestamp, so `is_abandoned` is always `False` in tests and the `abandoned: True` branch is untested.",
+    "proof": "Not broken (abandoned check depends on real wall-clock time; a break would require mocking `datetime.now`). SUMMARY: missing-coverage=3 blocking=0 requirements-listed=19 requirements-uncovered=3 restored=yes",
+    "found_by": [
+      "rv2-coverage"
+    ]
+  },
+  {
+    "index": 11,
+    "source": "rv2-consistency",
+    "axis": "consistency",
+    "file": "scripts/wayfinder_autopilot.py:472",
+    "severity": "low",
+    "confidence": "suspected",
+    "problem": "`duration_seconds` rounding to 3 decimal places produces variable JSON decimal precision (3.501 vs 3605.0)",
+    "why": "The code uses `round(value, 3)`. When the rounded value is exact (e.g. 3605.0), Python serialises it as `3605.0` (one decimal) rather than `3605.000` (three decimals). Consumers expecting a consistent decimal width in the JSON output would see an unexpected format. This is not a logic error—the values themselves are correct—but it breaks the implicit contract that rounding to N places yields N decimals.",
+    "repro": "Run `list_runs()` on a fixture with `started_at: \"2026-10-25T02:30:00+02:00\"`, `finished_at: \"2026-10-25T02:30:05+01:00\"`. The JSON output will contain `\"duration_seconds\": 3605.0` instead of `3605.000`.",
+    "evidence": "`json.dumps(round(3.500825, 3))` → `\"3.501\"`; `json.dumps(round(3605.0, 3))` → `\"3605.0\"`. SUMMARY: consistency=2 blocking=0 relations-checked=6",
+    "found_by": [
+      "rv2-consistency"
+    ]
+  }
+]
+```
+
+---
+
+## The diff of the branch against its base
+
+```diff
+diff --git a/scripts/wayfinder_autopilot.py b/scripts/wayfinder_autopilot.py
+index 3a3a9e6..5a30d3c 100644
+--- a/scripts/wayfinder_autopilot.py
++++ b/scripts/wayfinder_autopilot.py
+@@ -25,6 +25,8 @@ TASK_NAME = "Codex Wayfinder Autopilot"
+ TASK_XML_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
+ SCHEDULER_CLEANUP_GRACE_SECONDS = 300
+ QUEUE_SCOPE_PATTERN = re.compile(r"^(?:user|org):[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
++HISTORY_RUNS_DIR = "runs"
++HISTORY_STATE_OK = "ok"
+ 
+ 
+ @dataclass
+@@ -828,9 +830,82 @@ def build_parser() -> argparse.ArgumentParser:
+     subparsers.add_parser("install")
+     subparsers.add_parser("status")
+     subparsers.add_parser("uninstall")
++    history_parser = subparsers.add_parser("history")
++    history_parser.add_argument("--limit", type=int, default=None)
++    history_parser.add_argument("--state", action="append", default=None)
+     return parser
+ 
+ 
++def list_runs(config: AutopilotConfig, *, limit: int | None = None, states: list[str] | None = None) -> dict:
++    runs_dir = config.log_dir / HISTORY_RUNS_DIR
++    entries: list[dict] = []
++    if runs_dir.is_dir():
++        for child in runs_dir.iterdir():
++            if not child.is_dir():
++                continue
++            metadata_path = child / "run.json"
++            try:
++                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
++            except (json.JSONDecodeError, OSError):
++                entries.append({
++                    "run_id": child.name,
++                    "state": "unreadable",
++                    "dry_run": None,
++                    "started_at": None,
++                    "finished_at": None,
++                    "duration_seconds": None,
++                    "exit_code": None,
++                    "error": "failed to parse run.json",
++                    "events": None,
++                    "stderr": None,
++                    "final_message": None,
++                    "metadata": str(metadata_path),
++                })
++                continue
++            started = metadata.get("started_at")
++            finished = metadata.get("finished_at")
++            duration: float | None = None
++            if started and finished:
++                try:
++                    start_dt = datetime.fromisoformat(started)
++                    finish_dt = datetime.fromisoformat(finished)
++                    duration = round((finish_dt - start_dt).total_seconds(), 3)
++                except (ValueError, TypeError):
++                    pass
++            is_abandoned = False
++            if metadata.get("state") == "running" and started:
++                try:
++                    start_dt = datetime.fromisoformat(started)
++                    elapsed = (datetime.now().astimezone() - start_dt).total_seconds()
++                    if elapsed > SCHEDULER_CLEANUP_GRACE_SECONDS:
++                        is_abandoned = True
++                except (ValueError, TypeError):
++                    pass
++            entry = {
++                "run_id": metadata.get("run_id", child.name),
++                "state": metadata.get("state", "unknown"),
++                "dry_run": metadata.get("dry_run"),
++                "started_at": started,
++                "finished_at": finished,
++                "duration_seconds": duration,
++                "exit_code": metadata.get("exit_code"),
++                "error": metadata.get("error"),
++                "abandoned": is_abandoned,
++                "events": child.joinpath("events.jsonl") if (child / "events.jsonl").is_file() else None,
++                "stderr": child.joinpath("stderr.log") if (child / "stderr.log").is_file() else None,
++                "final_message": child.joinpath("final.md") if (child / "final.md").is_file() else None,
++                "metadata": str(metadata_path),
++            }
++            entries.append(entry)
++    # run_id is fixed-width timestamp, so lexicographic reverse == newest first
++    entries.sort(key=lambda e: e["run_id"], reverse=True)
++    if states:
++        entries = [e for e in entries if e["state"] in states]
++    if limit is not None:
++        entries = entries[:limit]
++    return {"state": HISTORY_STATE_OK, "runs": entries}
++
++
+ def main() -> int:
+     args = build_parser().parse_args()
+     try:
+@@ -849,6 +924,9 @@ def main() -> int:
+             result = task_status()
+             result["log_dir"] = str(config.log_dir)
+             result["skill"] = str(skill_destination)
++        elif args.command == "history":
++            states = sorted(args.state) if args.state else None
++            result = list_runs(config, limit=args.limit, states=states)
+         else:
+             result = remove(skill_destination, skills_root)
+         print(json.dumps(result, indent=2))
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index 44b7e5e..f401c50 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -1,5 +1,6 @@
+ import json
+ from pathlib import Path
++import subprocess
+ import sys
+ import tempfile
+ import unittest
+@@ -25,6 +26,7 @@ from wayfinder_autopilot import (  # noqa: E402
+     require_upstream_skill_files,
+     route_skill_names,
+     select_snapshot_route,
++    list_runs,
+ )
+ 
+ 
+@@ -512,6 +514,251 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+             check=False,
+         )
+ 
++    def test_list_runs_returns_empty_when_no_runs_dir(self):
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual([], result["runs"])
++
++    def test_list_runs_ignores_non_directory_entries_in_runs(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        (runs_dir / "notes.txt").write_text("ignore me", encoding="utf-8")
++        run_dir = runs_dir / "20260816T120000-000000"
++        run_dir.mkdir()
++        (run_dir / "run.json").write_text(
++            json.dumps({"run_id": "20260816T120000-000000", "state": "completed"}),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("completed", result["runs"][0]["state"])
++
++    def test_list_runs_ordering_is_newest_first_by_run_id(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id in ("20260816T120000-000000", "20260818T120000-000000", "20260817T120000-000000"):
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": "completed"}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config)
++        ids = [r["run_id"] for r in result["runs"]]
++        self.assertEqual(
++            ["20260818T120000-000000", "20260817T120000-000000", "20260816T120000-000000"],
++            ids,
++        )
++
++    def test_list_runs_with_limit(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id in ("20260816T120000-000000", "20260817T120000-000000", "20260818T120000-000000"):
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": "completed"}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config, limit=1)
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("20260818T120000-000000", result["runs"][0]["run_id"])
++
++    def test_list_runs_filters_by_state(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id, state in [
++            ("20260816T120000-000000", "completed"),
++            ("20260817T120000-000000", "failed"),
++            ("20260818T120000-000000", "completed"),
++        ]:
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": state}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config, states=["failed"])
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("failed", result["runs"][0]["state"])
++        result_multi = list_runs(self.config, states=["completed", "failed"])
++        self.assertEqual(3, len(result_multi["runs"]))
++
++    def test_list_runs_computes_duration_for_completed_run(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T155503-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "started_at": "2026-08-16T15:55:03.540718+02:00",
++                "finished_at": "2026-08-16T15:55:07.041543+02:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertAlmostEqual(3.501, entry["duration_seconds"], places=2)
++
++    def test_list_runs_computes_duration_across_utc_offset_change(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20261025T023000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "started_at": "2026-10-25T02:30:00+02:00",
++                "finished_at": "2026-10-25T02:30:05+01:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertAlmostEqual(3605.0, entry["duration_seconds"], places=1)
++
++    def test_list_runs_running_run_has_none_duration(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "running",
++                "started_at": "2026-08-16T15:55:03+02:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertEqual("running", entry["state"])
++        self.assertIsNone(entry["duration_seconds"])
++        self.assertIsNone(entry["finished_at"])
++
++    def test_list_runs_handles_truncated_run_json(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            '{"run_id": "x", "state": "run',
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(1, len(result["runs"]))
++        entry = result["runs"][0]
++        self.assertEqual("unreadable", entry["state"])
++        self.assertEqual("failed to parse run.json", entry["error"])
++
++    def test_list_runs_reports_artifact_paths(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({"run_id": run_id, "state": "completed"}),
++            encoding="utf-8",
++        )
++        (rd / "events.jsonl").write_text("", encoding="utf-8")
++        (rd / "stderr.log").write_text("", encoding="utf-8")
++        (rd / "final.md").write_text("done", encoding="utf-8")
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertEqual(str(rd / "events.jsonl"), str(entry["events"]))
++        self.assertEqual(str(rd / "stderr.log"), str(entry["stderr"]))
++        self.assertEqual(str(rd / "final.md"), str(entry["final_message"]))
++
++    def test_list_runs_missing_artifacts_are_none(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({"run_id": run_id, "state": "failed"}),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertIsNone(entry["events"])
++        self.assertIsNone(entry["stderr"])
++        self.assertIsNone(entry["final_message"])
++
++    def test_list_runs_round_trip_with_run_once(self):
++        fake = self.root / "fake_codex.py"
++        fake.write_text(
++            """
++from pathlib import Path
++import sys
++args = sys.argv[1:]
++Path(args[args.index('-o') + 1]).write_text('done', encoding='utf-8')
++""".strip(),
++            encoding="utf-8",
++        )
++        self.config.codex_command = [sys.executable, str(fake)]
++
++        run_once(
++            self.config,
++            dry_run=True,
++            token_provider=lambda: "test-token",
++            snapshot_provider=lambda config, token: {"data": {"queue": []}},
++        )
++
++        history = list_runs(self.config)
++        self.assertEqual("ok", history["state"])
++        self.assertEqual(1, len(history["runs"]))
++        entry = history["runs"][0]
++        self.assertRegex(entry["run_id"], r"^\d{8}T\d{6}-\d+")
++        self.assertEqual("completed", entry["state"])
++        self.assertTrue(entry["dry_run"])
++        self.assertIsNotNone(entry["started_at"])
++        self.assertIsNotNone(entry["finished_at"])
++        self.assertIsNotNone(entry["duration_seconds"])
++        self.assertEqual(0, entry["exit_code"])
++        self.assertIsNotNone(entry["metadata"])
++
++    def test_list_runs_all_required_keys_present(self):
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "dry_run": True,
++                "started_at": "2026-08-16T15:55:03+02:00",
++                "finished_at": "2026-08-16T15:55:07+02:00",
++                "exit_code": 0,
++                "workspace": "/fake/workspace",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        required_keys = {
++            "run_id", "state", "dry_run", "started_at", "finished_at",
++            "duration_seconds", "exit_code", "error",
++            "events", "stderr", "final_message", "metadata", "abandoned",
++        }
++        self.assertTrue(required_keys.issubset(entry.keys()))
++        self.assertEqual(run_id, entry["run_id"])
++        self.assertEqual("completed", entry["state"])
++        self.assertTrue(entry["dry_run"])
++        self.assertEqual(0, entry["exit_code"])
++
+ 
+ def subprocess_result(returncode, stdout="", stderr=""):
+     class Result:
+@@ -573,5 +820,132 @@ def issue_summary(issue):
+     }
+ 
+ 
++def _run_wayfinder_cli(args: list[str], workspace: Path) -> subprocess.CompletedProcess:
++    return subprocess.run(
++        [sys.executable, str(ROOT / "scripts" / "wayfinder_autopilot.py"),
++         "--workspace", str(workspace)] + args,
++        capture_output=True, text=True, check=False,
++    )
++
++
++class HistoryCLIIntegrationTests(unittest.TestCase):
++    """End-to-end CLI tests via subprocess."""
++
++    def setUp(self):
++        self.temporary = tempfile.TemporaryDirectory()
++        self.root = Path(self.temporary.name)
++        self.workspace = self.root / "workspace"
++        self.workspace.mkdir()
++        # Minimal autopilot config
++        (self.workspace / "config").mkdir()
++        (self.workspace / "config" / "wayfinder-autopilot.json").write_text(
++            json.dumps({
++                "queue_scopes": ["user:example"],
++                "control_repository": "example/workspace",
++                "log_dir": "logs",
++                "codex_command": ["codex.cmd"],
++                "trusted_repository_roots": ["repos"],
++            }),
++            encoding="utf-8",
++        )
++        # Build a runs tree with three runs
++        self.runs_dir = self.workspace / "logs" / "runs"
++        self.runs_dir.mkdir(parents=True)
++        for run_id in (
++            "20260816T120000-000000",
++            "20260817T120000-000000",
++            "20260818T120000-000000",
++        ):
++            rd = self.runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({
++                    "run_id": run_id,
++                    "state": "completed",
++                    "dry_run": False,
++                    "started_at": "2026-08-16T15:55:03+02:00",
++                    "finished_at": "2026-08-16T15:55:07+02:00",
++                    "exit_code": 0,
++                    "workspace": str(self.workspace),
++                }),
++                encoding="utf-8",
++            )
++            # Add a stray non-directory file
++        (self.runs_dir / "notes.txt").write_text("ignore", encoding="utf-8")
++
++    def tearDown(self):
++        self.temporary.cleanup()
++
++    def test_cli_history_ok(self):
++        proc = _run_wayfinder_cli(["history"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual("ok", data["state"])
++        self.assertEqual(3, len(data["runs"]))
++
++    def test_cli_history_limit(self):
++        proc = _run_wayfinder_cli(["history", "--limit", "1"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual(1, len(data["runs"]))
++        self.assertEqual("20260818T120000-000000", data["runs"][0]["run_id"])
++
++    def test_cli_history_state_filter(self):
++        # Add a failed run
++        rd = self.runs_dir / "20260819T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": "20260819T120000-000000",
++                "state": "failed",
++                "dry_run": False,
++                "started_at": "2026-08-16T15:55:03+02:00",
++                "finished_at": "2026-08-16T15:55:07+02:00",
++                "exit_code": 1,
++                "workspace": str(self.workspace),
++            }),
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history", "--state", "failed"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual(1, len(data["runs"]))
++        self.assertEqual("failed", data["runs"][0]["state"])
++
++    def test_cli_history_no_runs_directory(self):
++        # Create workspace without logs/runs
++        workspace = self.root / "clean"
++        workspace.mkdir()
++        (workspace / "config").mkdir()
++        (workspace / "config" / "wayfinder-autopilot.json").write_text(
++            json.dumps({
++                "queue_scopes": ["user:example"],
++                "control_repository": "example/workspace",
++                "log_dir": "logs",
++                "codex_command": ["codex.cmd"],
++                "trusted_repository_roots": ["repos"],
++            }),
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history"], workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual("ok", data["state"])
++        self.assertEqual([], data["runs"])
++
++    def test_cli_history_truncated_run_json(self):
++        rd = self.runs_dir / "20260820T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            '{"run_id": "x", "state": "run',
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        states = {r["state"] for r in data["runs"]}
++        self.assertIn("unreadable", states)
++
++
+ if __name__ == "__main__":
+     unittest.main()
+
+```
