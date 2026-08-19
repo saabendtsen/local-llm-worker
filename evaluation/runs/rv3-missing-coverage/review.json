@@ -1,0 +1,31 @@
+{
+  "review_id": "rv3-missing-coverage",
+  "recorded_at": "2026-08-19T18:17:38+00:00",
+  "branch": "worker/f03-status-page",
+  "base": "main",
+  "spec": "evaluation\\tasks\\f03-status-page.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 748.1,
+  "timed_out": false,
+  "idle_timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 21,
+    "tool_calls": 23,
+    "tools_used": {
+      "bash": 21,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 15112,
+    "received_chars": 15112,
+    "reason": null
+  },
+  "reviewer_modified_worktree": false,
+  "stderr_tail": ""
+}

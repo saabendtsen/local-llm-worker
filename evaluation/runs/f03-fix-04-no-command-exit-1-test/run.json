@@ -1,0 +1,52 @@
+{
+  "task_id": "f03-fix-04-no-command-exit-1-test",
+  "category": "tests",
+  "complexity": "small",
+  "recorded_at": "2026-08-19T18:33:33+00:00",
+  "repo": "C:\\Dev\\homelab\\experiments\\local-llm-worker",
+  "branch": "worker/f03-fix-04",
+  "base_commit": "b3eb6787f4c3f37699ee2e7a48ae0188568966ae",
+  "work_commit": "110d43808a3a82e93f7ddf9f76c3870f6eec4184",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f03-fix-04-no-command-exit-1-test.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 134.2,
+    "exit_code": 0,
+    "timed_out": false,
+    "idle_timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 3258,
+    "received_chars": 3258,
+    "reason": null
+  },
+  "events": {
+    "turns": 12,
+    "tool_calls": 12,
+    "tools_used": {
+      "bash": 7,
+      "edit": 3,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 1,
+    "lines_added": 14,
+    "lines_removed": 0,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m ruff check scripts tests && python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": "All checks passed!\n.................................................................. [ 61%]\n..........................................                               [100%]\n108 passed, 6 subtests passed in 4.96s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

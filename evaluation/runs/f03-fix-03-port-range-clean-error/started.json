@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-03-port-range-clean-error",
+  "title": "reject an out-of-range `--port` with a usage error instead of a traceback",
+  "started_at": "2026-08-19T18:28:45+00:00",
+  "category": "bugfix",
+  "branch": "worker/f03-fix-03",
+  "harness": "pi"
+}

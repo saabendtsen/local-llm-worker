@@ -1,0 +1,8 @@
+{
+  "kind": "review",
+  "task_id": "rv3-test-strength",
+  "title": "Review of worker/f03-status-page (review-focus-test-strength)",
+  "started_at": "2026-08-19T17:36:36+00:00",
+  "branch": "worker/f03-status-page",
+  "axis": "review-focus-test-strength"
+}

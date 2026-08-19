@@ -70,6 +70,14 @@ behavioural finding it produced is recorded under [Findings](#findings).
 | f02-auto-fix-06 | pin `--state` repeatable | tests | 15 | passed | **clean** | 246 s | triage-generated; reported actual failure, not the predicted one |
 | f02-auto-fix-07 | exact `3.501` assertion | tests | 18 | passed | **clean** | 148 s | triage-generated; mutation independently confirmed |
 | f02-auto-fix-08 | pin `abandoned` flag | tests | 23 | passed | **clean** | 305 s | triage-generated; mutation check done |
+| f03 | status page (greenfield) | feature-medium | 50 | passed | **minor repair** | 2158 s | +339/+436, 71→97; 10 review findings, 1 more on final read |
+| f03-fix-01 | unreadable terminal → unreadable only | bugfix | 10 | passed | **clean** | 328 s | triage-generated |
+| f03-fix-02 | unparseable --now clean error | bugfix | 6 | passed | **clean** | 107 s | triage-generated |
+| f03-fix-03 | --port range clean error | bugfix | 10 | passed | **clean** | 141 s | triage-generated |
+| f03-fix-04 | pin no-command exit 1 | tests | 12 | passed | **clean** | 134 s | triage-generated; mutation check |
+| f03-fix-05 | pin CLI status values | tests | 12 | passed | **clean** | 257 s | triage-generated |
+| f03-fix-06 | pin idle page | tests | 14 | passed | **clean** | 221 s | triage-generated; mutation check |
+| f03-fix-07 | naive --now treated as UTC | bugfix | 10 | passed | **clean** | 257 s | from the final frontier read |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.

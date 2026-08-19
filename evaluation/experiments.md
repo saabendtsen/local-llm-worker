@@ -892,6 +892,109 @@ frontier one. What E8 changes in the pipeline:
 3. **Fix cycles stay bounded and sequential**, one finding per cycle, each branching from the last.
    Eight in a row held without drift — three hand-written, five triage-generated.
 
+## E9 — The pipeline unattended, on a greenfield feature (f03)
+
+**Status:** run 2026-08-19, complete. Spec [`f03-status-page.md`](tasks/f03-status-page.md); runs
+`runs/f03-*`, `runs/rv3-*`, `runs/tr-f03-claude`.
+
+**Question.** E8 ran the chain with a person converting findings into tasks. Can it run with the
+triage step automated — implement → four reviews → aggregate → `run_triage.py` → every generated
+fix — as one script, with the frontier model involved only at the specification and the final
+read? And does it hold on a *new* program rather than a subcommand bolted onto an existing one?
+
+**The task.** A status page for the worker itself, Søren's request: `status_page.py status`
+prints JSON, `serve` answers `/` and `/status.json` on loopback, derived from the run directories.
+Greenfield — two new files, no existing module to lean on — with an HTTP server, which turned out
+to matter. To make it a pure reader the three runners first gained a `started.json` marker written
+the moment a run begins (a pipeline-owner change, committed before the run).
+
+**Predictions.**
+1. The implementation lands green with all three `[REQUIRED]` seams, as in E8.
+2. The reviewers find real defects in the error paths (a greenfield CLI has more of them) and the
+   triage runs validated first attempt.
+3. The chain runs end to end without intervention.
+
+**Results.**
+
+| Stage | Elapsed | Outcome |
+| --- | --- | --- |
+| implement | 36 min, 50 turns | +339 / +436 tests, 71 → 97 green, all seams; `status` correct against the real run dir on first use |
+| review: error-paths (1st try) | **60 min, hung** | 0 findings — see below |
+| review: error-paths (2nd) | 32 min | 3 findings (2 high) |
+| review: consistency | 16 min | 2 |
+| review: test-strength | 29 min | 3, 14 mutations run and restored |
+| review: missing-coverage | 12 min | 3 |
+| aggregate | — | 11 → 10 after dedupe; 4 high, 4 medium, 2 low |
+| triage (Claude, by CLI) | 3.6 min | **valid first attempt**: 3 fix, 3 fix-test-only, 2 defer, 2 drop |
+| fix-01 … fix-06 | 5.5 / 1.8 / 2.4 / 2.2 / 4.3 / 3.7 min | all in scope, all green, 97 → 110; every test-only cycle ran its mutation |
+| final read | — | one residual defect found; fix-07 (4.3 min) → 113 green |
+
+Prediction 1 held. Prediction 2 held — both highs from error-paths were real (`--now` and
+`--port` tracebacks). Prediction 3 **failed once, for a reason worth the hour**.
+
+### The hang: a tool, not a model
+
+The first error-paths reviewer started the page's HTTP server from bash "in the background". Pi's
+bash tool waits for the whole process group, `&` does not detach, the server never exits, and the
+review sat silent for 53 of its 60 minutes, reported nothing, and left two orphaned `serve`
+processes alive after the kill. The event stream stopped growing at minute seven; nothing was
+watching it.
+
+Three harness changes, all pushed before the relaunch:
+
+- **A tool rule in every worker and review prompt**: never start a process that does not exit on
+  its own; exercise such code through its tests or a snippet that starts and stops it. The relaunch
+  ran the same prompt otherwise and finished in 32 minutes with three findings.
+- **An idle watchdog**: `run_task` and `run_review` kill the harness when its event stream has not
+  grown for `--idle-timeout` seconds (900) and record `idle_timed_out: true`. Silence is now a
+  signal, not a wait.
+- **Tree kill**: `taskkill /T` on Windows, so a stuck grandchild dies with the harness.
+
+Two smaller harness defects surfaced the same day, both because f03 is the first task whose
+repository under test is *this* repository: the runner staged its own run directory and bytecode
+caches onto the worker branch as if the model had written them (fixed: runner artifacts are never
+staged; `.gitignore` covers bytecode), and `run_triage` stamped `recorded_at` at the start rather
+than the end, so the page showed the triage as `0:01`. The status page found that one — the first
+piece of pipeline output to be caught by pipeline output.
+
+### Triage, automated, versus the hand triage of E8
+
+Same prompt, same validator, no human between findings and tasks. It verified each finding against
+source with line numbers, turned the missing-coverage reviewer's `high` "idle is never shown" into
+a `fix-test-only` after reading the render branch that does show it, deferred the two
+negative-duration findings as a design question the spec left open rather than a bounded fix, and
+dropped two as already pinned — with the dropped finding's own concession quoted back. I would have
+made the same ten calls. The six generated tasks read like the hand-written ones and ran like them.
+
+### The final read still earns its place
+
+Four reviewers, one triage and six fixes later, `--now 2026-08-19T10:05:00` — valid ISO-8601, no
+offset — still tracebacked: `TypeError: can't subtract offset-naive and offset-aware datetimes`,
+uncaught by an `except (KeyError, ValueError)`. Error-paths had tested the *unparseable* `--now`
+(fix-02), not the parseable-but-naive one. Written as fix-07, the worker normalised at both
+boundaries and pinned both paths, 113 green.
+
+So the chain is not a substitute for a frontier read of the result; it is what makes that read
+cheap — one defect to find instead of eleven.
+
+### Verdict
+
+End to end, unattended, on a greenfield program: yes, once the harness stopped waiting on a
+process that would never return. Seven fix cycles held (thirteen across f02 and f03, none out of
+scope). The page is live on `http://127.0.0.1:8765` and showed its own pipeline's history as its
+first content.
+
+What E9 adds to the pipeline:
+
+1. **Harness-level tool rules** — the prompt carries what the tool cannot enforce.
+2. **Inactivity is a failure mode** — watch the event stream, not only the clock.
+3. **A final frontier read after the last fix**, budgeted as one more cycle, not skipped because
+   the reviewers were thorough.
+
+Open: an unexplained checkout of `worker/f03-status-page` in the main working tree between the
+triage and fix-01 (reflog only; no runner does it), so the chain ended on that branch rather than
+`main`. Harmless this time; the runner should refuse to start from a `worker/` branch.
+
 ---
 
 ## Settled questions

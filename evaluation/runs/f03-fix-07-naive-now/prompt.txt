@@ -1,0 +1,76 @@
+# Task: a `--now` without a UTC offset must not traceback
+
+**Edit `scripts/status_page.py` and `tests/test_status_page.py`. Nothing else.**
+
+A single bounded fix. Do not refactor, do not improve anything the task does not name, and do not
+touch any other finding.
+
+## Current behavior
+
+`--now` is parsed with `type=datetime.fromisoformat` (`scripts/status_page.py:306`). That accepts
+`2026-08-19T10:05:00` — a valid ISO-8601 string with **no offset** — and produces a naive
+`datetime`. Every `started_at` on disk is offset-aware, so the subtraction in `collect_status`
+(`duration = (now - started_dt).total_seconds()`) raises:
+
+```
+TypeError: can't subtract offset-naive and offset-aware datetimes
+```
+
+The `except (KeyError, ValueError)` around it does not catch `TypeError`, so the traceback reaches
+the user. Reproduce it:
+
+```
+mkdir <ws>\r1
+echo {"kind":"task","task_id":"x","title":"t","started_at":"2026-08-19T10:00:00+00:00"} > <ws>\r1\started.json
+python scripts/status_page.py status --runs <ws> --now 2026-08-19T10:05:00
+```
+
+The previous fix (`f03-fix-02`) made an *unparseable* `--now` exit cleanly; this is the parseable
+but naive case, which that fix did not cover.
+
+## Desired behavior
+
+A naive `--now` is treated as UTC. `--now 2026-08-19T10:05:00` behaves exactly like
+`--now 2026-08-19T10:05:00+00:00`: same durations, exit 0, no traceback. An offset-aware `--now`
+is unchanged.
+
+## Out of scope
+
+- Do not change how an unparseable `--now` is handled — `f03-fix-02` already covers it, keep its
+  test passing unchanged.
+- Do not change `collect_status`'s signature, the output schema, the server, or any other
+  behaviour.
+- Do not address any other review finding.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| Pure function: one running run `started_at: "2026-08-19T10:00:00+00:00"`, `now = datetime(2026, 8, 19, 10, 5, 0)` (naive) | `duration_seconds == 300.0`, no exception — the same literal the aware case gives |
+| CLI: same fixture, `status --runs <ws> --now 2026-08-19T10:05:00` | exit code **0**, stdout parses as JSON, `current["duration_seconds"] == 300.0` |
+| CLI: `--now 2026-08-19T10:05:00+00:00` | unchanged: exit 0 and `300.0` — pin it so the fix cannot regress the aware path |
+
+## Acceptance criteria
+
+- [ ] Every case above passes.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline on this branch is
+      **110 passed, 6 subtests passed**, ruff clean, so any other failure is a regression.
+- [ ] Return a concise summary of what changed and anything left unresolved.
+
+## Notes
+
+- The narrowest change is to normalise at the boundary: if the parsed `--now` has
+  `tzinfo is None`, `.replace(tzinfo=timezone.utc)` — either in the argparse `type` callable or at
+  the top of `collect_status`. Pick one; keep it small.
+- Follow the module's existing conventions. Ruff runs before pytest, so an unused import fails the
+  acceptance command.
+
+## Tool rules
+
+- **Never start a process that does not exit on its own** -- a server, a watcher, anything with
+  `serve`, `--watch`, or a `while True:` loop. The bash tool waits for the whole process group, so
+  `&` does not detach it and the call hangs until the run is killed. Exercise such code only
+  through its test suite, or through a Python snippet that starts it in a thread and shuts it down
+  in the same snippet. If you are about to type a command that would still be running a minute
+  later, do not run it.
+- Run the test suite and short one-off commands freely; nothing else.

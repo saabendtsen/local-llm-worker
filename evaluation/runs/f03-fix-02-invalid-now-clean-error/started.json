@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-02-invalid-now-clean-error",
+  "title": "reject an unparseable `--now` with a usage error instead of a traceback",
+  "started_at": "2026-08-19T18:26:52+00:00",
+  "category": "bugfix",
+  "branch": "worker/f03-fix-02",
+  "harness": "pi"
+}

@@ -1,0 +1,44 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+index 12df19c..b950272 100644
+--- a/scripts/status_page.py
++++ b/scripts/status_page.py
+@@ -162,7 +162,7 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+ 
+ def _cmd_status(args: argparse.Namespace) -> int:
+     runs_dir = args._runs if args._runs else Path(__file__).resolve().parent.parent / "evaluation" / "runs"
+-    now = datetime.fromisoformat(args.now) if args.now else None
++    now = args.now
+     result = collect_status(runs_dir, now)
+     print(json.dumps(result, indent=2))
+     return 0
+@@ -295,7 +295,7 @@ def _build_parser() -> argparse.ArgumentParser:
+         dest="_runs",
+         help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
+     )
+-    st.add_argument("--now", help="pin the current time as ISO-8601 (for tests)")
++    st.add_argument("--now", type=datetime.fromisoformat, help="pin the current time as ISO-8601 (for tests)")
+     st.set_defaults(func=_cmd_status)
+ 
+     sv = sub.add_parser("serve", help="run a loopback HTTP server")
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 6ce09cd..5624cee 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -326,6 +326,17 @@ class CliTests(unittest.TestCase):
+         self.assertIsNone(data["current"])
+         self.assertFalse(gone.exists())
+ 
++    def test_status_invalid_now(self) -> None:
++        """Unparseable --now → exit 2, error on stderr naming --now, no traceback."""
++        proc = _run_cli(
++            ["status", "--now", "not-a-date"],
++            self.runs,
++        )
++        self.assertNotEqual(proc.returncode, 0)
++        self.assertIn("--now", proc.stderr)
++        self.assertNotIn("Traceback", proc.stderr)
++        self.assertIn("invalid", proc.stderr.lower())
++
+ 
+ # ---------------------------------------------------------------------------
+ # HTTP server

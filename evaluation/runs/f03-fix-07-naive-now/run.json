@@ -1,0 +1,52 @@
+{
+  "task_id": "f03-fix-07-naive-now",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-19T18:50:40+00:00",
+  "repo": "C:\\Dev\\homelab\\experiments\\local-llm-worker",
+  "branch": "worker/f03-fix-07",
+  "base_commit": "1feb552a34ea063631c34a601edbdb60557e5a44",
+  "work_commit": "7f13d27148436dc89aed34849a19d3fc5dc1cf08",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f03-fix-07-naive-now.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 257.2,
+    "exit_code": 0,
+    "timed_out": false,
+    "idle_timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 3547,
+    "received_chars": 3547,
+    "reason": null
+  },
+  "events": {
+    "turns": 10,
+    "tool_calls": 10,
+    "tools_used": {
+      "bash": 5,
+      "edit": 3,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 35,
+    "lines_removed": 1,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m ruff check scripts tests && python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": "All checks passed!\n.................................................................. [ 58%]\n...............................................                          [100%]\n113 passed, 6 subtests passed in 6.42s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

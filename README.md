@@ -75,6 +75,7 @@ scripts\run-task.cmd evaluation\tasks\0001-example.md
 | `scripts/aggregate_findings.py` | Union the reviewers' findings, dedupe, order, enforce the confidence floor |
 | `scripts/run_triage.py` | Frontier triage by CLI, strict output contract, renders chained fix tasks |
 | `prompts/` | Every prompt the pipeline sends: four review axes, the broad review, triage |
+| `scripts/status_page.py` | What the worker is doing right now: `status` prints JSON, `serve` is a loopback page on :8765 |
 | `docs/runtime.md` | Model, backend, flag rationale, tuning |
 | `docs/harness-pi.md` | Pi configuration and observed worker behaviour |
 | `docs/using-small-models.md` | Standing reference: how to get useful work out of a small local model |
@@ -104,4 +105,5 @@ experiment changed. Short version: the worker builds real features from a well-f
 fresh-context focused reviewers find real defects with almost no false positives; triage has to be
 a frontier step because one finding in eleven was inverted; and bounded one-finding fix cycles hold.
 
-Next: does the fix loop hold past three cycles, findings-only triage, Codex as a second frontier.
+E9 then ran the chain unattended on a greenfield feature (the status page), triage automated.
+Next: findings-only triage, Codex as a second frontier, a repeat arm on f03.

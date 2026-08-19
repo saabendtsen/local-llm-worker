@@ -1,0 +1,31 @@
+{
+  "review_id": "rv3-consistency",
+  "recorded_at": "2026-08-19T17:36:36+00:00",
+  "branch": "worker/f03-status-page",
+  "base": "main",
+  "spec": "evaluation\\tasks\\f03-status-page.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 936.1,
+  "timed_out": false,
+  "idle_timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 11,
+    "tool_calls": 13,
+    "tools_used": {
+      "bash": 11,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 14975,
+    "received_chars": 14975,
+    "reason": null
+  },
+  "reviewer_modified_worktree": true,
+  "stderr_tail": ""
+}

@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-05-cli-status-values-test",
+  "title": "make the CLI `status` test assert the fixture's actual values so `--runs`/`--now` wiring is pinned",
+  "started_at": "2026-08-19T18:33:34+00:00",
+  "category": "tests",
+  "branch": "worker/f03-fix-05",
+  "harness": "pi"
+}

@@ -1,0 +1,40 @@
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 25074cd..5c8d091 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -305,16 +305,31 @@ class CliTests(unittest.TestCase):
+         self.tmpdir.cleanup()
+ 
+     def test_status_exits_0_and_parses_json(self) -> None:
+-        """CLI status prints valid JSON and exits 0."""
++        """CLI status pins --now correctly and returns the fixture value-by-value."""
++        # c1: finished run (started 10:00, recorded 10:01)
+         run_dir = _write_started(self.runs, "c1", "task", "Cli task",
+                                  "2026-08-19T10:00:00+00:00")
+         _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        # c2: still running (started 10:00, no terminal file)
++        _write_started(self.runs, "c2", "task", "Cli run",
++                       "2026-08-19T10:00:00+00:00")
+         proc = _run_cli(["status", "--now", "2026-08-19T10:02:00+00:00"], self.runs)
+         self.assertEqual(proc.returncode, 0)
+         data = json.loads(proc.stdout)
+-        self.assertIn("current", data)
+-        self.assertIn("recent", data)
+-        self.assertIn("ignored", data)
++        # c2 is current (only running run; --now drives its duration)
++        self.assertEqual(data["current"]["task_id"], "c2")
++        self.assertEqual(data["current"]["duration_seconds"], 120.0)
++        # exactly one running run
++        self.assertEqual(len(data["running"]), 1)
++        self.assertEqual(data["running"][0]["task_id"], "c2")
++        # c1 is the most recent finished run
++        self.assertEqual(data["recent"][0]["task_id"], "c1")
++        self.assertEqual(data["recent"][0]["duration_seconds"], 60.0)
++        self.assertEqual(data["recent"][0]["finished_at"],
++                         "2026-08-19T10:01:00+00:00")
++        # no ignored or unreadable
++        self.assertEqual(data["ignored"], 0)
++        self.assertEqual(data["unreadable"], [])
+ 
+     def test_status_non_existent_runs(self) -> None:
+         """Non-existent --runs → empty result, exit 0, dir not created."""

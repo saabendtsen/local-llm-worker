@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-01-unreadable-terminal-not-running",
+  "title": "a run whose terminal file is unreadable must go to `unreadable` only, never to `running`",
+  "started_at": "2026-08-19T18:21:17+00:00",
+  "category": "bugfix",
+  "branch": "worker/f03-fix-01",
+  "harness": "pi"
+}

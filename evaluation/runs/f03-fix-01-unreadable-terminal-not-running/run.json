@@ -1,0 +1,52 @@
+{
+  "task_id": "f03-fix-01-unreadable-terminal-not-running",
+  "category": "bugfix",
+  "complexity": "small",
+  "recorded_at": "2026-08-19T18:26:52+00:00",
+  "repo": "C:\\Dev\\homelab\\experiments\\local-llm-worker",
+  "branch": "worker/f03-fix-01",
+  "base_commit": "54b7afa9ec0fae5acf8dc66c864c6e641b2168cb",
+  "work_commit": "ab17865b3767861a785cca4e10e66b29f7c6035d",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f03-fix-01-unreadable-terminal-not-running.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 328.2,
+    "exit_code": 0,
+    "timed_out": false,
+    "idle_timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 6855,
+    "received_chars": 6855,
+    "reason": null
+  },
+  "events": {
+    "turns": 10,
+    "tool_calls": 11,
+    "tools_used": {
+      "bash": 6,
+      "edit": 3,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 58,
+    "lines_removed": 19,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m ruff check scripts tests && python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": "All checks passed!\n.................................................................. [ 63%]\n......................................                                   [100%]\n104 passed, 6 subtests passed in 4.39s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

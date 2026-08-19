@@ -1,0 +1,153 @@
+{
+  "reviews_read": [
+    "evaluation\\runs\\rv3-error-paths",
+    "evaluation\\runs\\rv3-consistency",
+    "evaluation\\runs\\rv3-test-strength",
+    "evaluation\\runs\\rv3-missing-coverage"
+  ],
+  "findings_parsed": 11,
+  "findings_after_filters": 11,
+  "findings_after_dedupe": 10,
+  "findings": [
+    {
+      "source": "rv3-missing-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/status_page.py, `_StatusHandler._serve_html",
+      "severity": "high",
+      "confidence": "verified",
+      "requirement": "\"the current run's title, kind, id and elapsed time as m:ss (or \"idle\" when current is null)\"",
+      "gap": "The HTML page renders \"idle\" when no run is current, but no test asserts the word \"idle\" appears in the HTML body when `current` is null. The only \"nothing running\" test (`test_nothing_running`) checks the JSON output (`current is None`) \u2014 the HTML path is untested.",
+      "proof": "Replaced `title = kind = task_id = duration = \"idle\"` with `\"SHOULD_NOT_APPEAR_IN_HTML\"` in the source. Started the server against a fixture with only finished runs. Fetched `/`. The body contained `SHOULD_NOT_APPEAR_IN_HTML` and not `idle`. The existing test suite passed (no assertion on idle text) \u2014 the break was silently ignored.",
+      "found_by": [
+        "rv3-missing-coverage",
+        "rv3-missing-coverage"
+      ]
+    },
+    {
+      "source": "rv3-consistency",
+      "axis": "consistency",
+      "file": "scripts/status_page.py:101-103",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "Directory with an unreadable terminal file (valid started.json but run.json contains a list, not a dict) appears in BOTH the `unreadable` list AND the `running` list",
+      "why": "The `for/else` loop over `TERMINAL_FILES` has two code paths that both result in `terminal_file` being `None`: (1) no terminal files exist \u2192 `else` clause explicitly sets `terminal_file = None` (correct), and (2) a terminal file exists but is not a valid dict \u2192 `break` exits without reaching `else`, leaving `terminal_file` at its initial `None` value (bug). Both paths then fall into the `if terminal_file is not None` \u2192 `else` branch which treats the directory as a running run. The spec says a run is \"running\" only when \"none of run.json, review.json, triage.json does\" \u2014 but here `run.json` does exist, so the run is NOT running per the spec",
+      "repro": "Create a directory with `started.json` = `{\"kind\":\"task\",\"started_at\":\"2026-08-19T09:00:00+00:00\"}` and `run.json` = `[1, 2, 3]`, then run `python scripts/status_page.py status --runs <fixture_dir> --now 2026-08-19T10:00:00+00:00",
+      "evidence": "`unreadable = ['case-b']` and `running = [{'task_id': 'b', ...}]` \u2014 the same directory (task_id='b') is in both lists; `current` incorrectly references it with `duration_seconds=1800.0",
+      "found_by": [
+        "rv3-consistency"
+      ]
+    },
+    {
+      "source": "rv3-error-paths",
+      "axis": "error-paths",
+      "file": "scripts/status_page.py:175",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "Invalid --now argument produces a Python traceback",
+      "why": "The call to `datetime.fromisoformat(args.now)` at line 175 raises `ValueError: Invalid isoformat string: 'not-a-date'` and the traceback propagates through `main()` to `__main__`, reaching the user. The spec requires exit 0 on valid flags; an invalid flag should produce a one-line error and exit non-zero.",
+      "repro": "`python scripts/status_page.py status --runs C:/tmp --now not-a-date",
+      "evidence": "`ValueError: Invalid isoformat string: 'not-a-date'` with full traceback to line 337",
+      "found_by": [
+        "rv3-error-paths"
+      ]
+    },
+    {
+      "source": "rv3-error-paths",
+      "axis": "error-paths",
+      "file": "scripts/status_page.py:285",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "Negative port number produces a Python traceback",
+      "why": "`ThreadingHTTPServer((host, port), handler)` at line 285 receives `port=-1` (accepted by argparse's `type=int`), but `socket.bind()` raises `OverflowError: bind(): port must be 0-65535`. The traceback escapes to the user instead of a clean error message.",
+      "repro": "`python scripts/status_page.py serve --port -1",
+      "evidence": "`OverflowError: bind(): port must be 0-65535` with full traceback through `server_bind()` to line 337",
+      "found_by": [
+        "rv3-error-paths"
+      ]
+    },
+    {
+      "source": "rv3-missing-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/status_page.py, `main",
+      "severity": "medium",
+      "confidence": "verified",
+      "requirement": "\"If no command is given, print help and return exit code 1\" (implicit from CLI contract \u2014 `main()` returns 1 when `args.command` is falsy)",
+      "gap": "When no subcommand is provided, `main()` returns 1 (prints help). No test calls `main()` or invokes the script with zero arguments and asserts the exit code is 1. The CLI tests always provide `status`.",
+      "proof": "Changed the guard to `return 0` instead of `return 1`. Ran `python scripts/status_page.py` with no arguments. Exit code was 0 instead of 1. The existing test suite passed \u2014 no test exercises the no-command path.",
+      "found_by": [
+        "rv3-missing-coverage"
+      ]
+    },
+    {
+      "source": "rv3-error-paths",
+      "axis": "error-paths",
+      "file": "scripts/status_page.py:135-136",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "Negative duration accepted silently",
+      "why": "When `recorded_at` is earlier than `started_at` (e.g. a clock reset or corrupt data), `(recorded_dt - started_dt).total_seconds()` returns a negative number like `-600.0`. The code never validates `duration >= 0`, so a plausible-looking but wrong result is returned silently. This is worse than a crash because the user gets a misleading number.",
+      "repro": "`python scripts/status_page.py status --runs <fixture-with-started-after-recorded> --now 2026-08-19T10:05:00+00:00",
+      "evidence": "`duration_seconds=-600.0` returned as a valid field; no validation, no warning, exit 0 --- SUMMARY: error-paths=3 blocking=2 cases-tested=6",
+      "found_by": [
+        "rv3-error-paths"
+      ]
+    },
+    {
+      "source": "rv3-test-strength",
+      "axis": "test-strength",
+      "file": "tests/test_status_page.py:285-293",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "`test_status_json_200` checks only HTTP status 200, Content-Type, and that the JSON body contains keys `\"current\"` and `\"generated_at\"`. It does not assert that `current` has the expected task data. If `_serve_json` returned constant empty data, the test would pass.",
+      "mutation": "replaced `_serve_json` body with a hardcoded `{\"current\": None, \"running\": [], \"recent\": [], \"unreadable\": [], \"ignored\": 0}` object",
+      "result": "1 passed (the test passed with completely empty data instead of the fixture's running + finished runs)",
+      "why": "the fixture contains a running run (`http-1`) and a finished run (`http-2`); empty data is invisible to the assertion --- SUMMARY: test-strength=3 blocking=0 mutations-run=14 restored=yes",
+      "found_by": [
+        "rv3-test-strength"
+      ]
+    },
+    {
+      "source": "rv3-test-strength",
+      "axis": "test-strength",
+      "file": "tests/test_status_page.py:232-241",
+      "severity": "medium",
+      "confidence": "suspected",
+      "problem": "test_status_exits_0_and_parses_json checks only key existence (\"current\", \"recent\", \"ignored\"), not values. The test fixture creates a finished run (duration 60 s), but the test would pass even if `collect_status` returned `{\"current\": null, \"running\": [], \"recent\": [], \"ignored\": 0}` \u2014 empty data with the right keys.",
+      "mutation": "insert `return {\"generated_at\": \"...\", \"current\": None, \"running\": [], \"recent\": [], \"unreadable\": [], \"ignored\": 0}` at the top of `collect_status",
+      "result": "(suspected \u2014 the fixture's finished run would be silently invisible; `recent` would be empty, `current` null)",
+      "why": "a broken implementation that returns default/empty data passes the test because no actual values are asserted ---",
+      "found_by": [
+        "rv3-test-strength"
+      ]
+    },
+    {
+      "source": "rv3-test-strength",
+      "axis": "test-strength",
+      "file": "tests/test_status_page.py:107-121",
+      "severity": "low",
+      "confidence": "verified",
+      "problem": "`test_finished_review` and `test_finished_triage` individually do not verify that the running/finished distinction works. They only assert `recent[0][\"kind\"] == \"review\"` (from the fixture's `started.json`) and `running == []`. If the code always appended every run to `recent` regardless of terminal file presence, these two tests pass.",
+      "mutation": "removed the `if terminal_file is not None` / `else` branch; always computed duration and appended to `recent",
+      "result": "2 passed (the review and triage tests passed with the broken code)",
+      "why": "all runs would appear as finished/recent; in-flight runs would be silently misclassified",
+      "note": "`test_current_is_newest_of_two` does catch this mutation, so the suite as a whole is safe, but these individual tests are weak on their own ---",
+      "found_by": [
+        "rv3-test-strength"
+      ]
+    },
+    {
+      "source": "rv3-consistency",
+      "axis": "consistency",
+      "file": "scripts/status_page.py:35",
+      "severity": "low",
+      "confidence": "suspected",
+      "problem": "`_format_duration` produces `\"-1:55\"` for negative input (`-5.0`), which violates the `m:ss` convention",
+      "why": "Python floor division (`-5 // 60 = -1`) and modulo (`-5 % 60 = 55`) yield `\"-1:55\"` instead of something meaningful. The spec defines `duration_seconds = now \u2212 started_at` for running runs \u2014 if `started_at` happens to be after `now`, the result is negative. The `m:ss` format in the spec implies non-negative minutes and seconds, but the implementation produces a nonsensical string for negative durations",
+      "repro": "`_format_duration(-5.0)` \u2192 returns `\"-1:55\"",
+      "evidence": "`_format_duration(5.0)` \u2192 `\"0:05\"`, `_format_duration(-5.0)` \u2192 `\"-1:55\"` (minutes is `-1`, not a valid display) SUMMARY: consistency=2 blocking=1 relations-checked=7 **Relations checked (7):** 1. **unreadable \u2229 running = \u2205** \u2014 violated (Finding 1): a directory with an unreadable terminal file lands in both lists 2. **current \u2208 running \u222a {null}** \u2014 violated (Finding 1): `current` points to a directory that has a terminal file (just unreadable), contradicting the spec's definition of \"running\" 3. **total_dirs = running + recent + unreadable + ignored** \u2014 violated (Finding 1): sum overcounts because the unreadable-terminal directory is counted in both `running` and `unreadable 4. **running = {dirs with valid started.json AND no terminal file}** \u2014 violated (Finding 1): the set includes dirs where a terminal file exists but is invalid 5. **duration_seconds for running = now - started_at** \u2014 satisfied (verified via cross-timezone test: 5.0s correct) 6. **duration_seconds for finished = recorded_at - started_at** \u2014 satisfied (verified: 392.0s correct) 7. **current = running[0] (newest)** \u2014 satisfied when running is non-empty",
+      "found_by": [
+        "rv3-consistency"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,282 @@
+# Review Task — test strength only
+
+You are reviewing a code change **you did not write**. You have one narrow job.
+
+**Your only subject: whether the tests would actually catch a bug.** Not whether they pass — they
+do. Not whether there are enough of them. Whether they *discriminate*.
+
+Ignore the implementation's style, naming, error handling and design. Another reviewer covers
+those. If you find something outside your remit, drop it.
+
+## The thing you are looking for
+
+Tests written after the code tend to check that the code agrees with itself. They pass, they look
+thorough, and they would keep passing if the implementation were wrong.
+
+The test to distrust most is the one that reads as if the author ran the code, saw the output, and
+wrote an assertion matching it.
+
+## The method — this is the whole job
+
+For each test, answer one question: **what could I change in the source that would NOT make this
+test fail?**
+
+If you can name such a change, and it would be a real bug, the test is weak. If you cannot name
+one, the test is doing its job.
+
+**Then actually do it.** Do not reason about it — make the change, run the test, and record what
+happened. Restore the file afterwards.
+
+Mutations worth trying, in rough order of value:
+
+1. **Return a constant** from the function under test — the same shape, wrong values.
+2. **Invert a condition** — swap `if x` for `if not x` in the changed code.
+3. **Skip a step** — delete the line that filters, sorts, deduplicates, or validates.
+4. **Swap two values** that should be distinguishable — two categories, two counts, two keys.
+5. **Zero out a value** the test claims to check.
+6. **Return an empty collection** where items were expected.
+
+For each mutation: apply it, run only the relevant tests, record pass or fail, restore.
+
+## What counts as a finding
+
+- **A test that survives a mutation that is a real bug.** Name the mutation and paste the passing
+  output. This is the strongest possible finding here.
+- **An assertion that cannot fail.** `assertIn(k, d)` where the code inserts `k` unconditionally.
+  `assertGreaterEqual(n, 0)` on a count. An assertion comparing a value to itself recomputed the
+  same way.
+- **A test whose name promises more than it checks** — "matches" or "equals" in the name, with no
+  comparison in the body.
+- **Behaviour the specification requires with no test at all.** Read the spec's list of required
+  cases and check each one has a test that would fail without it. **The entry point — argument
+  parsing, exit codes, stderr — is the usual gap.**
+- **An assertion pinned to nothing external.** The value asserted should come from the
+  specification, a known-good literal, or a source the code does not itself produce. If the
+  expected value is computed the same way the code computes it, the test proves nothing.
+
+## How to work
+
+1. Read the specification's list of required cases.
+2. Read the test file. For each test, write down the mutation you predict it will not catch.
+3. Apply each mutation, run the tests, record the result, restore the source.
+4. Report only mutations you actually ran.
+
+**Restore every file you touched.** Confirm with `git status` before reporting, and say in your
+output that you did.
+
+## Report
+
+Output only these blocks, nothing before or after.
+
+```
+### FINDING <n>
+axis: test-strength
+file: <test path>:<line-or-range>
+severity: high | medium | low
+confidence: verified | suspected
+problem: <which test is weak, and in what way>
+mutation: <the exact change you made to the source>
+result: <what the tests did — "27 passed" is the damning outcome here>
+why: <the real bug this mutation represents>
+```
+
+`severity: high` means the mutation is a genuine bug that ships silently.
+`confidence: verified` requires a mutation you actually applied and ran. Without one it is
+`suspected`, and you may report at most two suspected findings.
+
+End with exactly one line:
+
+```
+SUMMARY: test-strength=<n> blocking=<n> mutations-run=<n> restored=<yes|no>
+```
+
+**An all-clear with `mutations-run=0` means you did not do the job.** Report the number honestly.
+
+
+---
+
+## The change under review
+
+Branch `worker/f03-status-page`, based on `main`. The repository is checked out at the branch tip,
+so every file is readable and the test suite is runnable.
+
+Get the diff with either:
+
+- `git diff main...HEAD` — run it yourself, or
+- read the file `C:\Dev\homelab\experiments\local-llm-worker\evaluation\runs\rv3-test-strength\under-review.patch`, which holds the same diff.
+
+## Tool rules
+
+- **Never start a process that does not exit on its own** -- a server, a watcher, anything with
+  `serve`, `--watch`, or a `while True:` loop. The bash tool waits for the whole process group, so
+  `&` does not detach it and the call hangs until the run is killed. Exercise such code only
+  through its test suite, or through a Python snippet that starts it in a thread and shuts it down
+  in the same snippet. If you are about to type a command that would still be running a minute
+  later, do not run it.
+- Run the test suite and short one-off commands freely; nothing else.
+
+---
+
+## The task specification the change was meant to satisfy
+
+# Task: a status page showing what the local worker is doing right now
+
+**Create `scripts/status_page.py`.** Then **create `tests/test_status_page.py`**. Change no other
+file.
+
+## Current behavior
+
+Every pipeline run — a task, a review, a triage — gets a directory under `evaluation/runs/<id>/`.
+Since today each runner writes `started.json` there the moment the directory exists:
+
+```json
+{
+  "kind": "task",                       // or "review", "triage"
+  "task_id": "f02-fix-03-readonly-test",
+  "title": "pin the read-only constraint with a test",
+  "started_at": "2026-08-19T04:31:47+00:00",
+  "branch": "worker/f02-fix-03"          // plus other kind-specific keys; ignore them
+}
+```
+
+When the run ends, one terminal file appears beside it — `run.json` for a task, `review.json` for
+a review, `triage.json` for a triage — and each carries a top-level `recorded_at` in the same
+ISO-8601 form (search each runner for `"recorded_at"`). Older run directories predate the marker and have no `started.json`.
+
+**Nothing reads any of this while a run is in flight.** To know what the worker is doing you open
+a terminal and look at the log. The person who wants to glance at it from another room cannot.
+
+## Desired behavior
+
+One script, standard library only, no new dependencies:
+
+```
+python scripts/status_page.py status [--runs DIR] [--now ISO8601]
+python scripts/status_page.py serve  [--runs DIR] [--host HOST] [--port N]
+```
+
+- `status` prints one JSON object to stdout and exits 0:
+
+  ```json
+  {
+    "generated_at": "...",
+    "current": { "task_id": "...", "kind": "task", "title": "...", "started_at": "...",
+                 "duration_seconds": 123.0 } | null,
+    "running":  [ ...every in-flight run, same shape, newest started first... ],
+    "recent":   [ ...finished runs, newest first, same shape plus "finished_at"... ],
+    "unreadable": [ "<dir name>", ... ],
+    "ignored": <count of directories without started.json>
+  }
+  ```
+
+  `current` is the newest entry of `running`, or `null` when nothing is in flight. `recent` is
+  capped at 10. `--now` pins the clock for tests; without it, use the real UTC time.
+
+- `serve` runs an HTTP server — `http.server` from the standard library — that answers
+  `GET /` with a plain HTML page and `GET /status.json` with exactly the object above, computed
+  fresh on every request. Anything else is a 404. The page shows: the current run's title, kind,
+  id and elapsed time as `m:ss` (or "idle" when `current` is null), and a short table of recent
+  runs. It refreshes itself with `<meta http-equiv="refresh" content="10">`. No JavaScript, no
+  external assets, inline CSS only. Everything written into the page passes through
+  `html.escape`.
+
+- `--host` defaults to `127.0.0.1`, `--port` to `8765`. Not `0.0.0.0` — this workstation's local
+  endpoints are loopback-only on purpose, and the page has no authentication.
+
+Duration rules — the only arithmetic in the task, so get it exactly right:
+
+- a run is **running** when `started.json` exists and none of `run.json`, `review.json`,
+  `triage.json` does; `duration_seconds = now − started_at`;
+- a run is **finished** when a terminal file exists; `duration_seconds = recorded_at − started_at`
+  and `finished_at = recorded_at`;
+- parse every timestamp with `datetime.fromisoformat`; they carry offsets, so subtraction is
+  timezone-correct without any string handling;
+- a directory whose `started.json` or terminal file is missing, truncated or not an object goes
+  in `unreadable` by name, never raises, never stops the listing;
+- a directory with no `started.json` at all is counted in `ignored` and otherwise skipped.
+
+## Key interfaces
+
+- `scripts/run_task.py` — `write_started()` (line ~76) is the writer of `started.json`; its
+  `datetime.now(timezone.utc).isoformat(timespec="seconds")` is the timestamp format on both ends.
+- `evaluation/runs/` — the real data. `f02-fix-03-readonly-test/` is a finished task, `rv2-errors/`
+  a finished review, `tr-f02-claude/` a finished triage; all three predate `started.json`, so
+  against the real directory they are `ignored` today. Do not add files to any real run directory.
+- `http.server.ThreadingHTTPServer` with a `BaseHTTPRequestHandler` subclass; bind port `0` in
+  tests and read `server.server_address[1]`.
+
+## Seams under test
+
+- **The pure function** — something like `collect_status(runs_dir: Path, now: datetime) -> dict`
+  — over a fixture `runs/` tree built by hand in a temporary directory. **[REQUIRED]**
+- **`main()` through the command line** — `status` as a subprocess against the fixture, asserting
+  exit code 0 and that stdout parses as JSON. Build a small `run_cli` helper with `subprocess.run([sys.executable, str(SCRIPT), ...],
+  capture_output=True, text=True)`.
+  **[REQUIRED]**
+- **The HTTP server** — start it on port 0 in a thread, `urllib.request.urlopen` both paths and a
+  bogus one, shut it down in `tearDown`. **[REQUIRED]** This is the seam that catches a handler
+  that works in the author's head and 500s in a browser.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| Running: `started_at: "2026-08-19T10:00:00+00:00"`, `--now 2026-08-19T10:05:30+00:00`, no terminal file | `duration_seconds == 330.0`, state running, it is `current` |
+| Running across offsets: `started_at: "2026-08-19T12:00:00+02:00"`, now `"2026-08-19T10:00:05+00:00"` | **`5.0`** — verified by `datetime.fromisoformat` subtraction; string arithmetic gets this wrong by two hours |
+| Finished task: `started_at: "2026-08-19T10:00:00+00:00"`, `run.json` with `recorded_at: "2026-08-19T10:06:32+00:00"` | `duration_seconds == 392.0`, `finished_at == "2026-08-19T10:06:32+00:00"`, appears in `recent`, not in `running` |
+| Finished review with only `review.json`; finished triage with only `triage.json` | each is recognised as finished by its own terminal file name |
+| Two running runs started `10:00:00` and `10:03:00` | `current` is the `10:03:00` one; `running` lists both, newest first |
+| Nothing running, two finished | `current is None`, `recent` newest-first by `started_at` |
+| Twelve finished runs | `len(recent) == 10`, the ten newest |
+| `started.json` containing `{"kind": "task", "title": ` (truncated) | that directory name is in `unreadable`; every other run is still listed; exit code 0 |
+| `started.json` containing `[1, 2, 3]` | same — in `unreadable`, no traceback |
+| A directory with `run.json` but no `started.json`; a stray file `runs/notes.txt` | `ignored == 1`, the file is not counted or listed, nothing raises |
+| `--runs` pointing at a directory that does not exist | `current is None`, `running == []`, `recent == []`, exit 0, **and the directory is not created** — assert on the filesystem |
+| HTTP `GET /status.json` over a tree with only finished runs | status 200, `Content-Type` starts with `application/json`, body parses to the same object the pure function returns for that tree once `generated_at` is removed from both — finished durations do not depend on the clock, so only that key differs |
+| HTTP `GET /` | status 200, `Content-Type` starts with `text/html`, body contains the current run's title |
+| HTTP `GET /` with a current title of `<b>x</b>` | body contains `&lt;b&gt;x&lt;/b&gt;` and not `<b>x</b>` |
+| HTTP `GET /nope` | status 404 |
+| `serve` and `status` never write | snapshot the set of paths under the fixture before and after a `collect_status` call and two HTTP requests; the sets are equal |
+
+## Out of scope
+
+- Do not modify `scripts/run_task.py`, `run_review.py`, `run_triage.py` or any existing file.
+- Do not add files under `evaluation/runs/`. Tests use a temporary directory only.
+- No third-party packages, no JavaScript, no external fonts or stylesheets.
+- No authentication, no write endpoints, no configuration file. Flags only.
+
+## Acceptance criteria
+
+- [ ] `python scripts/status_page.py status` against the real `evaluation/runs/` exits 0 and prints
+      valid JSON (today that means `current: null` and a non-zero `ignored`).
+- [ ] Every case in the table behaves as its source of truth requires.
+- [ ] The read-only test fails if `runs_dir.mkdir(parents=True, exist_ok=True)` is inserted at the
+      top of `collect_status`. Verify this yourself: insert it, watch the test fail, remove it,
+      and quote the failure in your summary.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline on `main` is
+      **71 passed, 6 subtests passed**, ruff clean, so any other failure is a regression introduced
+      here.
+- [ ] Return a concise summary of what you built, the design choices you made and why, and
+      anything left unresolved.
+
+## Deliberately left to you
+
+- whether `recent` is sorted by `started_at` or `finished_at` — say which in the summary;
+- how `m:ss` renders hours (`1:02:03` or `62:03`) — pick one, test it;
+- whether the page shows the `branch` key when present;
+- the handler's logging — `http.server` prints every request to stderr by default; silence it or
+  keep it, but say which.
+
+## Notes
+
+- Conventions in this repo: `from __future__ import annotations`, `SCREAMING_CASE` constants,
+  functions returning plain `dict`, private helpers prefixed `_`, `pathlib` only. Tests:
+  `unittest.TestCase`, `sys.path.insert(0, str(ROOT / "scripts"))` then a flat
+  `from status_page import (...)  # noqa: E402`, fixtures in `setUp` with
+  `tempfile.TemporaryDirectory()`, torn down in `tearDown`, file ends
+  `if __name__ == "__main__": unittest.main()`. Read `tests/test_run_task.py` for the shape.
+- `datetime.now(timezone.utc)` for the default clock; keep a `now` parameter on the pure function
+  so the tests never depend on the wall clock.
+- `ThreadingHTTPServer.shutdown()` must be called from a different thread than `serve_forever()`;
+  start the server with `threading.Thread(target=server.serve_forever, daemon=True)`.
+- Ruff runs with defaults, so an unused import in either file fails the acceptance command.

@@ -1,0 +1,8 @@
+{
+  "kind": "review",
+  "task_id": "rv3-consistency",
+  "title": "Review of worker/f03-status-page (review-focus-consistency)",
+  "started_at": "2026-08-19T17:20:59+00:00",
+  "branch": "worker/f03-status-page",
+  "axis": "review-focus-consistency"
+}

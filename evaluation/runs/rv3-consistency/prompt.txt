@@ -1,0 +1,269 @@
+# Review Task — internal consistency only
+
+You are reviewing a code change **you did not write**. You have one narrow job.
+
+**Your only subject: places where the code contradicts itself.** Two numbers that should agree and
+do not. A rule stated in one place and broken in another. A field documented as one thing and
+populated as another.
+
+Ignore style, naming, test quality, and whether the design is good. Another reviewer covers those.
+If you find something outside your remit, drop it.
+
+## Why this is hard, and how to actually do it
+
+A contradiction is invisible when you read code top to bottom, because each half looks right on its
+own. You cannot find these by reading. You find them by **computing the same quantity two different
+ways and comparing**.
+
+So: for every number, list, or flag the code produces, ask *"is this value derivable from something
+else the code also produces?"* If yes, derive it both ways on real data and check they match.
+
+## What to hunt
+
+1. **A total that should equal a sum of parts.** A summary count versus the sum of a per-category
+   breakdown. A "decided" count versus the number of decided items. Compute both. Compare.
+2. **The same concept counted under two different rules.** One place counts anything present;
+   another counts only valid entries. On clean data they agree, which is why this survives review —
+   feed it one invalid entry and they diverge.
+3. **A collection filtered in one place and not another.** An item excluded from one output but
+   included in a total that is supposed to describe the same set.
+4. **An invariant stated in a comment, docstring, or specification and violated in code.** Search
+   the change for words like "always", "never", "must", "exactly one". Then check.
+5. **A field described one way and populated another.** A key documented as a path that sometimes
+   holds `"unknown"`; a field called a count that can be `None`.
+6. **A special case that changes the answer's meaning.** An `if` that suppresses an output under
+   some condition, making the result discontinuous — one input yields nothing, a barely different
+   input yields a hundred entries.
+7. **Two entries in the same output using different conventions** — one dict listing all keys
+   including zeros, another omitting zero entries, so consumers must treat them differently.
+
+## How to work
+
+1. Read the specification for anything it says the output must contain, and any relation it states
+   between parts of the output.
+2. Run the code on the real data and capture the full output.
+3. **Write a small throwaway script** that recomputes the derivable quantities independently and
+   asserts they agree. Run it. Put it outside the repository.
+4. Then feed the code a case that is *not* clean — an invalid value, an empty input, a duplicate —
+   and re-check the same relations. **This is where the contradictions live.** Clean data hides them.
+5. Report only relations you actually computed and saw break.
+
+Do not modify anything in the repository.
+
+## Report
+
+Output only these blocks, nothing before or after.
+
+```
+### FINDING <n>
+axis: consistency
+file: <path>:<line-or-range>
+severity: high | medium | low
+confidence: verified | suspected
+problem: <the two things that disagree, named>
+why: <which is wrong, or why both cannot be right>
+repro: <the input that makes them diverge, and the command>
+evidence: <both values as you actually observed them>
+```
+
+`severity: high` means a consumer reading the output would draw a false conclusion.
+`confidence: verified` requires two concrete values you observed disagreeing. Without them it is
+`suspected`, and you may report at most two suspected findings.
+
+End with exactly one line:
+
+```
+SUMMARY: consistency=<n> blocking=<n> relations-checked=<n>
+```
+
+`relations-checked` is how many "these two should agree" pairs you actually computed both sides of.
+**An all-clear with `relations-checked=0` means you did not do the job.** Report it honestly.
+
+
+---
+
+## The change under review
+
+Branch `worker/f03-status-page`, based on `main`. The repository is checked out at the branch tip,
+so every file is readable and the test suite is runnable.
+
+Get the diff with either:
+
+- `git diff main...HEAD` — run it yourself, or
+- read the file `C:\Dev\homelab\experiments\local-llm-worker\evaluation\runs\rv3-consistency\under-review.patch`, which holds the same diff.
+
+## Tool rules
+
+- **Never start a process that does not exit on its own** -- a server, a watcher, anything with
+  `serve`, `--watch`, or a `while True:` loop. The bash tool waits for the whole process group, so
+  `&` does not detach it and the call hangs until the run is killed. Exercise such code only
+  through its test suite, or through a Python snippet that starts it in a thread and shuts it down
+  in the same snippet. If you are about to type a command that would still be running a minute
+  later, do not run it.
+- Run the test suite and short one-off commands freely; nothing else.
+
+---
+
+## The task specification the change was meant to satisfy
+
+# Task: a status page showing what the local worker is doing right now
+
+**Create `scripts/status_page.py`.** Then **create `tests/test_status_page.py`**. Change no other
+file.
+
+## Current behavior
+
+Every pipeline run — a task, a review, a triage — gets a directory under `evaluation/runs/<id>/`.
+Since today each runner writes `started.json` there the moment the directory exists:
+
+```json
+{
+  "kind": "task",                       // or "review", "triage"
+  "task_id": "f02-fix-03-readonly-test",
+  "title": "pin the read-only constraint with a test",
+  "started_at": "2026-08-19T04:31:47+00:00",
+  "branch": "worker/f02-fix-03"          // plus other kind-specific keys; ignore them
+}
+```
+
+When the run ends, one terminal file appears beside it — `run.json` for a task, `review.json` for
+a review, `triage.json` for a triage — and each carries a top-level `recorded_at` in the same
+ISO-8601 form (search each runner for `"recorded_at"`). Older run directories predate the marker and have no `started.json`.
+
+**Nothing reads any of this while a run is in flight.** To know what the worker is doing you open
+a terminal and look at the log. The person who wants to glance at it from another room cannot.
+
+## Desired behavior
+
+One script, standard library only, no new dependencies:
+
+```
+python scripts/status_page.py status [--runs DIR] [--now ISO8601]
+python scripts/status_page.py serve  [--runs DIR] [--host HOST] [--port N]
+```
+
+- `status` prints one JSON object to stdout and exits 0:
+
+  ```json
+  {
+    "generated_at": "...",
+    "current": { "task_id": "...", "kind": "task", "title": "...", "started_at": "...",
+                 "duration_seconds": 123.0 } | null,
+    "running":  [ ...every in-flight run, same shape, newest started first... ],
+    "recent":   [ ...finished runs, newest first, same shape plus "finished_at"... ],
+    "unreadable": [ "<dir name>", ... ],
+    "ignored": <count of directories without started.json>
+  }
+  ```
+
+  `current` is the newest entry of `running`, or `null` when nothing is in flight. `recent` is
+  capped at 10. `--now` pins the clock for tests; without it, use the real UTC time.
+
+- `serve` runs an HTTP server — `http.server` from the standard library — that answers
+  `GET /` with a plain HTML page and `GET /status.json` with exactly the object above, computed
+  fresh on every request. Anything else is a 404. The page shows: the current run's title, kind,
+  id and elapsed time as `m:ss` (or "idle" when `current` is null), and a short table of recent
+  runs. It refreshes itself with `<meta http-equiv="refresh" content="10">`. No JavaScript, no
+  external assets, inline CSS only. Everything written into the page passes through
+  `html.escape`.
+
+- `--host` defaults to `127.0.0.1`, `--port` to `8765`. Not `0.0.0.0` — this workstation's local
+  endpoints are loopback-only on purpose, and the page has no authentication.
+
+Duration rules — the only arithmetic in the task, so get it exactly right:
+
+- a run is **running** when `started.json` exists and none of `run.json`, `review.json`,
+  `triage.json` does; `duration_seconds = now − started_at`;
+- a run is **finished** when a terminal file exists; `duration_seconds = recorded_at − started_at`
+  and `finished_at = recorded_at`;
+- parse every timestamp with `datetime.fromisoformat`; they carry offsets, so subtraction is
+  timezone-correct without any string handling;
+- a directory whose `started.json` or terminal file is missing, truncated or not an object goes
+  in `unreadable` by name, never raises, never stops the listing;
+- a directory with no `started.json` at all is counted in `ignored` and otherwise skipped.
+
+## Key interfaces
+
+- `scripts/run_task.py` — `write_started()` (line ~76) is the writer of `started.json`; its
+  `datetime.now(timezone.utc).isoformat(timespec="seconds")` is the timestamp format on both ends.
+- `evaluation/runs/` — the real data. `f02-fix-03-readonly-test/` is a finished task, `rv2-errors/`
+  a finished review, `tr-f02-claude/` a finished triage; all three predate `started.json`, so
+  against the real directory they are `ignored` today. Do not add files to any real run directory.
+- `http.server.ThreadingHTTPServer` with a `BaseHTTPRequestHandler` subclass; bind port `0` in
+  tests and read `server.server_address[1]`.
+
+## Seams under test
+
+- **The pure function** — something like `collect_status(runs_dir: Path, now: datetime) -> dict`
+  — over a fixture `runs/` tree built by hand in a temporary directory. **[REQUIRED]**
+- **`main()` through the command line** — `status` as a subprocess against the fixture, asserting
+  exit code 0 and that stdout parses as JSON. Build a small `run_cli` helper with `subprocess.run([sys.executable, str(SCRIPT), ...],
+  capture_output=True, text=True)`.
+  **[REQUIRED]**
+- **The HTTP server** — start it on port 0 in a thread, `urllib.request.urlopen` both paths and a
+  bogus one, shut it down in `tearDown`. **[REQUIRED]** This is the seam that catches a handler
+  that works in the author's head and 500s in a browser.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| Running: `started_at: "2026-08-19T10:00:00+00:00"`, `--now 2026-08-19T10:05:30+00:00`, no terminal file | `duration_seconds == 330.0`, state running, it is `current` |
+| Running across offsets: `started_at: "2026-08-19T12:00:00+02:00"`, now `"2026-08-19T10:00:05+00:00"` | **`5.0`** — verified by `datetime.fromisoformat` subtraction; string arithmetic gets this wrong by two hours |
+| Finished task: `started_at: "2026-08-19T10:00:00+00:00"`, `run.json` with `recorded_at: "2026-08-19T10:06:32+00:00"` | `duration_seconds == 392.0`, `finished_at == "2026-08-19T10:06:32+00:00"`, appears in `recent`, not in `running` |
+| Finished review with only `review.json`; finished triage with only `triage.json` | each is recognised as finished by its own terminal file name |
+| Two running runs started `10:00:00` and `10:03:00` | `current` is the `10:03:00` one; `running` lists both, newest first |
+| Nothing running, two finished | `current is None`, `recent` newest-first by `started_at` |
+| Twelve finished runs | `len(recent) == 10`, the ten newest |
+| `started.json` containing `{"kind": "task", "title": ` (truncated) | that directory name is in `unreadable`; every other run is still listed; exit code 0 |
+| `started.json` containing `[1, 2, 3]` | same — in `unreadable`, no traceback |
+| A directory with `run.json` but no `started.json`; a stray file `runs/notes.txt` | `ignored == 1`, the file is not counted or listed, nothing raises |
+| `--runs` pointing at a directory that does not exist | `current is None`, `running == []`, `recent == []`, exit 0, **and the directory is not created** — assert on the filesystem |
+| HTTP `GET /status.json` over a tree with only finished runs | status 200, `Content-Type` starts with `application/json`, body parses to the same object the pure function returns for that tree once `generated_at` is removed from both — finished durations do not depend on the clock, so only that key differs |
+| HTTP `GET /` | status 200, `Content-Type` starts with `text/html`, body contains the current run's title |
+| HTTP `GET /` with a current title of `<b>x</b>` | body contains `&lt;b&gt;x&lt;/b&gt;` and not `<b>x</b>` |
+| HTTP `GET /nope` | status 404 |
+| `serve` and `status` never write | snapshot the set of paths under the fixture before and after a `collect_status` call and two HTTP requests; the sets are equal |
+
+## Out of scope
+
+- Do not modify `scripts/run_task.py`, `run_review.py`, `run_triage.py` or any existing file.
+- Do not add files under `evaluation/runs/`. Tests use a temporary directory only.
+- No third-party packages, no JavaScript, no external fonts or stylesheets.
+- No authentication, no write endpoints, no configuration file. Flags only.
+
+## Acceptance criteria
+
+- [ ] `python scripts/status_page.py status` against the real `evaluation/runs/` exits 0 and prints
+      valid JSON (today that means `current: null` and a non-zero `ignored`).
+- [ ] Every case in the table behaves as its source of truth requires.
+- [ ] The read-only test fails if `runs_dir.mkdir(parents=True, exist_ok=True)` is inserted at the
+      top of `collect_status`. Verify this yourself: insert it, watch the test fail, remove it,
+      and quote the failure in your summary.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline on `main` is
+      **71 passed, 6 subtests passed**, ruff clean, so any other failure is a regression introduced
+      here.
+- [ ] Return a concise summary of what you built, the design choices you made and why, and
+      anything left unresolved.
+
+## Deliberately left to you
+
+- whether `recent` is sorted by `started_at` or `finished_at` — say which in the summary;
+- how `m:ss` renders hours (`1:02:03` or `62:03`) — pick one, test it;
+- whether the page shows the `branch` key when present;
+- the handler's logging — `http.server` prints every request to stderr by default; silence it or
+  keep it, but say which.
+
+## Notes
+
+- Conventions in this repo: `from __future__ import annotations`, `SCREAMING_CASE` constants,
+  functions returning plain `dict`, private helpers prefixed `_`, `pathlib` only. Tests:
+  `unittest.TestCase`, `sys.path.insert(0, str(ROOT / "scripts"))` then a flat
+  `from status_page import (...)  # noqa: E402`, fixtures in `setUp` with
+  `tempfile.TemporaryDirectory()`, torn down in `tearDown`, file ends
+  `if __name__ == "__main__": unittest.main()`. Read `tests/test_run_task.py` for the shape.
+- `datetime.now(timezone.utc)` for the default clock; keep a `now` parameter on the pure function
+  so the tests never depend on the wall clock.
+- `ThreadingHTTPServer.shutdown()` must be called from a different thread than `serve_forever()`;
+  start the server with `threading.Thread(target=server.serve_forever, daemon=True)`.
+- Ruff runs with defaults, so an unused import in either file fails the acceptance command.

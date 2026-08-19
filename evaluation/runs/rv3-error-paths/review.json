@@ -1,0 +1,33 @@
+{
+  "review_id": "rv3-error-paths",
+  "recorded_at": "2026-08-19T17:20:58+00:00",
+  "branch": "worker/f03-status-page",
+  "base": "main",
+  "spec": "evaluation\\tasks\\f03-status-page.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 1949.8,
+  "timed_out": false,
+  "idle_timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 49,
+    "tool_calls": 51,
+    "tools_used": {
+      "bash": 35,
+      "read": 8,
+      "write": 4,
+      "edit": 4
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 14851,
+    "received_chars": 14851,
+    "reason": null
+  },
+  "reviewer_modified_worktree": true,
+  "stderr_tail": ""
+}

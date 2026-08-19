@@ -1,0 +1,79 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+index 0414721..df8e8aa 100644
+--- a/scripts/status_page.py
++++ b/scripts/status_page.py
+@@ -31,6 +31,12 @@ DEFAULT_PORT = 8765
+ # Helpers
+ # ---------------------------------------------------------------------------
+ 
++def _parse_now(text: str) -> datetime:
++    """Parse an ISO-8601 datetime, treating naive datetimes as UTC."""
++    dt = datetime.fromisoformat(text)
++    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
++
++
+ def _port_number(text: str) -> int:
+     """Validate a port number in the range 0..65535."""
+     value = int(text)
+@@ -73,6 +79,8 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+     """
+     if now is None:
+         now = datetime.now(timezone.utc)
++    elif now.tzinfo is None:
++        now = now.replace(tzinfo=timezone.utc)
+ 
+     running: list[dict[str, Any]] = []
+     recent: list[dict[str, Any]] = []
+@@ -303,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
+         dest="_runs",
+         help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
+     )
+-    st.add_argument("--now", type=datetime.fromisoformat, help="pin the current time as ISO-8601 (for tests)")
++    st.add_argument("--now", type=_parse_now, help="pin the current time as ISO-8601 (for tests)")
+     st.set_defaults(func=_cmd_status)
+ 
+     sv = sub.add_parser("serve", help="run a loopback HTTP server")
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 787ca85..2f17925 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -278,6 +278,14 @@ class CollectStatusTests(unittest.TestCase):
+         self.assertEqual(result["recent"], [])
+         self.assertFalse(gone.exists())
+ 
++    def test_naive_now_treated_as_utc(self) -> None:
++        """Naive --now datetime (no tzinfo) with offset-aware started_at → no TypeError, correct duration."""
++        naive_now = datetime(2026, 8, 19, 10, 5, 0)  # tzinfo is None
++        _write_started(self.runs, "naive", "task", "Naive now task",
++                       "2026-08-19T10:00:00+00:00")
++        result = collect_status(self.runs, naive_now)
++        self.assertEqual(result["current"]["duration_seconds"], 300.0)
++
+ 
+ # ---------------------------------------------------------------------------
+ # CLI through subprocess
+@@ -366,6 +374,24 @@ class CliTests(unittest.TestCase):
+         self.assertNotIn("Traceback", proc.stderr)
+         self.assertIn("invalid", proc.stderr.lower())
+ 
++    def test_status_naive_now(self) -> None:
++        """Naive --now (no offset) treated as UTC → exit 0, correct duration."""
++        _write_started(self.runs, "n", "task", "Naive now CLI",
++                       "2026-08-19T10:00:00+00:00")
++        proc = _run_cli(["status", "--now", "2026-08-19T10:05:00"], self.runs)
++        self.assertEqual(proc.returncode, 0)
++        data = json.loads(proc.stdout)
++        self.assertEqual(data["current"]["duration_seconds"], 300.0)
++
++    def test_status_aware_now(self) -> None:
++        """Aware --now (+00:00) → exit 0, correct duration (unchanged path)."""
++        _write_started(self.runs, "a", "task", "Aware now CLI",
++                       "2026-08-19T10:00:00+00:00")
++        proc = _run_cli(["status", "--now", "2026-08-19T10:05:00+00:00"], self.runs)
++        self.assertEqual(proc.returncode, 0)
++        data = json.loads(proc.stdout)
++        self.assertEqual(data["current"]["duration_seconds"], 300.0)
++
+     # -- invalid port
+ 
+     def test_serve_invalid_port_negative(self) -> None:

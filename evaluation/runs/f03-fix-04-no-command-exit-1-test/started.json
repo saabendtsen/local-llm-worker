@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-04-no-command-exit-1-test",
+  "title": "pin that running the script with no sub-command prints help and exits 1",
+  "started_at": "2026-08-19T18:31:13+00:00",
+  "category": "tests",
+  "branch": "worker/f03-fix-04",
+  "harness": "pi"
+}

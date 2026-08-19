@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-06-html-idle-test",
+  "title": "pin that `GET /` renders \"idle\" when nothing is running",
+  "started_at": "2026-08-19T18:37:58+00:00",
+  "category": "tests",
+  "branch": "worker/f03-fix-06",
+  "harness": "pi"
+}

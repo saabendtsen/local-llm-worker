@@ -1,0 +1,787 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+new file mode 100644
+index 0000000..366417f
+--- /dev/null
++++ b/scripts/status_page.py
+@@ -0,0 +1,339 @@
++"""Status page for the local worker — what it is doing right now.
++
++Usage:
++    python scripts/status_page.py status [--runs DIR] [--now ISO8601]
++    python scripts/status_page.py serve  [--runs DIR] [--host HOST] [--port N]
++
++The *status* sub-command prints a JSON object to stdout and exits 0.
++The *serve* sub-command runs a loopback HTTP server with a refreshable
++HTML page and a JSON API.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from datetime import datetime, timezone
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from pathlib import Path
++from typing import Any
++
++# ---------------------------------------------------------------------------
++# Constants
++# ---------------------------------------------------------------------------
++
++TERMINAL_FILES = ("run.json", "review.json", "triage.json")
++DEFAULT_HOST = "127.0.0.1"
++DEFAULT_PORT = 8765
++
++
++# ---------------------------------------------------------------------------
++# Helpers
++# ---------------------------------------------------------------------------
++
++def _format_duration(seconds: float) -> str:
++    """Format seconds as *m:ss*.  No hours prefix — 1 h 2 m 3 s → *62:03*."""
++    total = int(seconds)
++    minutes = total // 60
++    secs = total % 60
++    return f"{minutes}:{secs:02d}"
++
++
++def _read_json_object(path: Path) -> dict[str, Any] | None:
++    """Read *path*, decode JSON, return the value only if it is a ``dict``.
++
++    Returns ``None`` when the file is missing, truncated, not valid JSON, or
++    the top-level value is not an object (list, scalar, etc.).
++    """
++    try:
++        data = json.loads(path.read_text(encoding="utf-8"))
++        return data if isinstance(data, dict) else None
++    except (FileNotFoundError, json.JSONDecodeError, OSError):
++        return None
++
++
++# ---------------------------------------------------------------------------
++# Core function — the seam for every test
++# ---------------------------------------------------------------------------
++
++def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any]:
++    """Produce the status object for *runs_dir* at the given moment.
++
++    This function is pure with respect to the filesystem except that it reads
++    the directory.  The *now* parameter lets tests pin the clock without
++    patching ``datetime.now``.
++    """
++    if now is None:
++        now = datetime.now(timezone.utc)
++
++    running: list[dict[str, Any]] = []
++    recent: list[dict[str, Any]] = []
++    unreadable: list[str] = []
++    ignored = 0
++
++    if not runs_dir.is_dir():
++        return {
++            "generated_at": now.isoformat(),
++            "current": None,
++            "running": [],
++            "recent": [],
++            "unreadable": [],
++            "ignored": 0,
++        }
++
++    for entry in runs_dir.iterdir():
++        if not entry.is_dir():
++            continue
++
++        started = _read_json_object(entry / "started.json")
++        if started is None:
++            if not (entry / "started.json").exists():
++                ignored += 1
++            else:
++                unreadable.append(entry.name)
++            continue
++
++        # Find the terminal file for this run.
++        terminal_file: Path | None = None
++        terminal_data: dict[str, Any] | None = None
++        for tf_name in TERMINAL_FILES:
++            tf_path = entry / tf_name
++            if tf_path.exists():
++                data = _read_json_object(tf_path)
++                if data is not None:
++                    terminal_file = tf_path
++                    terminal_data = data
++                    break
++                else:
++                    # File exists but is not a valid JSON object → unreadable.
++                    unreadable.append(entry.name)
++                    break
++        else:
++            terminal_file = None
++            terminal_data = None
++
++        if terminal_file is not None:
++            # Finished run — build the record and compute duration from the
++            # data in the files, not from the live clock.
++            try:
++                started_dt = datetime.fromisoformat(started["started_at"])
++                recorded_dt = datetime.fromisoformat(terminal_data["recorded_at"])
++                duration = (recorded_dt - started_dt).total_seconds()
++            except (KeyError, ValueError):
++                unreadable.append(entry.name)
++                continue
++
++            record: dict[str, Any] = {
++                "kind": started.get("kind"),
++                "task_id": started.get("task_id"),
++                "title": started.get("title"),
++                "started_at": started["started_at"],
++                "duration_seconds": duration,
++                "finished_at": terminal_data["recorded_at"],
++            }
++            recent.append(record)
++        else:
++            # No terminal file — in-flight run.
++            try:
++                started_dt = datetime.fromisoformat(started["started_at"])
++                duration = (now - started_dt).total_seconds()
++            except (KeyError, ValueError):
++                unreadable.append(entry.name)
++                continue
++
++            record = {
++                "kind": started.get("kind"),
++                "task_id": started.get("task_id"),
++                "title": started.get("title"),
++                "started_at": started["started_at"],
++                "duration_seconds": duration,
++            }
++            running.append(record)
++
++    # Sort: newest started first (descending by started_at).
++    running.sort(key=lambda r: r["started_at"], reverse=True)
++    recent.sort(key=lambda r: r["started_at"], reverse=True)
++
++    current = running[0] if running else None
++
++    return {
++        "generated_at": now.isoformat(),
++        "current": current,
++        "running": running,
++        "recent": recent[:10],
++        "unreadable": unreadable,
++        "ignored": ignored,
++    }
++
++
++# ---------------------------------------------------------------------------
++# Sub-commands
++# ---------------------------------------------------------------------------
++
++def _cmd_status(args: argparse.Namespace) -> int:
++    runs_dir = args._runs if args._runs else Path(__file__).resolve().parent.parent / "evaluation" / "runs"
++    now = datetime.fromisoformat(args.now) if args.now else None
++    result = collect_status(runs_dir, now)
++    print(json.dumps(result, indent=2))
++    return 0
++
++
++class _StatusHandler(BaseHTTPRequestHandler):
++    """Serve the HTML page and the JSON status endpoint."""
++
++    # Silence the default access log lines.
++    def log_message(self, format: str, *args: Any) -> None:
++        pass
++
++    def _send(self, status: int, body: str, content_type: str) -> None:
++        self.send_response(status)
++        self.send_header("Content-Type", content_type)
++        self.end_headers()
++        self.wfile.write(body.encode("utf-8"))
++
++    def do_GET(self) -> None:  # noqa: N802
++        if self.path == "/status.json":
++            self._serve_json()
++        elif self.path == "/":
++            self._serve_html()
++        else:
++            self._send(404, "Not Found", "text/plain")
++
++    def _serve_json(self) -> None:
++        result = collect_status(self._runs_dir, self._now)
++        self._send(200, json.dumps(result, indent=2), "application/json; charset=utf-8")
++
++    def _serve_html(self) -> None:
++        import html as _html
++
++        result = collect_status(self._runs_dir, self._now)
++        current = result["current"]
++
++        if current:
++            title = _html.escape(str(current.get("title", "")))
++            kind = _html.escape(str(current.get("kind", "")))
++            task_id = _html.escape(str(current.get("task_id", "")))
++            duration = _format_duration(current["duration_seconds"])
++        else:
++            title = kind = task_id = duration = "idle"
++
++        rows: list[str] = []
++        for run in result["recent"]:
++            r_title = _html.escape(str(run.get("title", "")))
++            r_kind = _html.escape(str(run.get("kind", "")))
++            r_id = _html.escape(str(run.get("task_id", "")))
++            r_dur = _format_duration(run["duration_seconds"])
++            rows.append(
++                f"      <tr>"
++                f"<td>{r_id}</td>"
++                f"<td>{r_kind}</td>"
++                f"<td>{r_title}</td>"
++                f"<td>{r_dur}</td>"
++                f"</tr>"
++            )
++        rows_html = "\n".join(rows) if rows else "      <tr><td colspan=\"4\">No recent runs</td></tr>"
++
++        page = f"""\
++<!DOCTYPE html>
++<html>
++<head>
++<title>Local Worker Status</title>
++<meta http-equiv="refresh" content="10">
++<style>
++  body {{ font-family: sans-serif; margin: 2em; }}
++  table {{ border-collapse: collapse; width: 100%; }}
++  th, td {{ border: 1px solid #ccc; padding: 4px 8px; text-align: left; }}
++  th {{ background: #f4f4f4; }}
++</style>
++</head>
++<body>
++<h1>Local Worker Status</h1>
++<p>Generated at: {_html.escape(result["generated_at"])}</p>
++<h2>Current</h2>
++<p>
++  <strong>Title:</strong> {title} &nbsp;
++  <strong>Kind:</strong> {kind} &nbsp;
++  <strong>ID:</strong> {task_id} &nbsp;
++  <strong>Elapsed:</strong> {duration}
++</p>
++<h2>Recent runs</h2>
++<table>
++<thead>
++  <tr><th>ID</th><th>Kind</th><th>Title</th><th>Duration</th></tr>
++</thead>
++<tbody>
++{rows_html}
++</tbody>
++</table>
++</body>
++</html>
++"""
++        self._send(200, page, "text/html; charset=utf-8")
++
++
++def _cmd_serve(args: argparse.Namespace) -> int:
++    runs_dir = args._runs if args._runs else Path(__file__).resolve().parent.parent / "evaluation" / "runs"
++    host = args.host or DEFAULT_HOST
++    port = args.port or DEFAULT_PORT
++
++    handler: type[_StatusHandler] = type(
++        "_StatusHandler",
++        (_StatusHandler,),
++        {"_runs_dir": runs_dir, "_now": datetime.now(timezone.utc)},
++    )
++
++    server = ThreadingHTTPServer((host, port), handler)
++    print(f"Serving on http://{host}:{port}/")
++    try:
++        server.serve_forever()
++    except KeyboardInterrupt:
++        pass
++    finally:
++        server.shutdown()
++    return 0
++
++
++def _build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description=__doc__.strip())
++    sub = parser.add_subparsers(dest="command")
++
++    st = sub.add_parser("status", help="print the current status as JSON to stdout")
++    st.add_argument(
++        "--runs",
++        type=Path,
++        default=None,
++        dest="_runs",
++        help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
++    )
++    st.add_argument("--now", help="pin the current time as ISO-8601 (for tests)")
++    st.set_defaults(func=_cmd_status)
++
++    sv = sub.add_parser("serve", help="run a loopback HTTP server")
++    sv.add_argument(
++        "--runs",
++        type=Path,
++        default=None,
++        dest="_runs",
++        help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
++    )
++    sv.add_argument("--host", default=DEFAULT_HOST, help="bind address (default: loopback only)")
++    sv.add_argument("--port", type=int, default=DEFAULT_PORT, help="port to listen on")
++    sv.set_defaults(func=_cmd_serve)
++
++    return parser
++
++
++def main() -> int:
++    parser = _build_parser()
++    args = parser.parse_args()
++    if not args.command:
++        parser.print_help()
++        return 1
++    return args.func(args)
++
++
++if __name__ == "__main__":
++    try:
++        raise SystemExit(main())
++    except SystemExit:
++        raise
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+new file mode 100644
+index 0000000..1f7b3b1
+--- /dev/null
++++ b/tests/test_status_page.py
+@@ -0,0 +1,436 @@
++"""Tests for scripts/status_page.py — status page and HTTP server."""
++
++from __future__ import annotations
++
++import json
++import subprocess
++import sys
++import tempfile
++import threading
++import unittest
++from datetime import datetime, timezone
++from pathlib import Path
++from urllib.request import urlopen
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT / "scripts"))
++
++from status_page import collect_status  # noqa: E402
++
++SCRIPT = ROOT / "scripts" / "status_page.py"
++
++# ---------------------------------------------------------------------------
++# Fixture helpers
++# ---------------------------------------------------------------------------
++
++_STARTED_TEMPLATE = (
++    '{\n'
++    '  "kind": "%(kind)s",\n'
++    '  "task_id": "%(task_id)s",\n'
++    '  "title": "%(title)s",\n'
++    '  "started_at": "%(started_at)s"\n'
++    '}\n'
++)
++
++_TERMINAL_TEMPLATE = (
++    '{\n'
++    '  "recorded_at": "%(recorded_at)s"\n'
++    '}\n'
++)
++
++
++def _write_started(runs_dir: Path, task_id: str, kind: str, title: str, started_at: str,
++                   **extra: object) -> Path:
++    """Write a *started.json* under *runs_dir/<task_id>/*, returning the run dir."""
++    run_dir = runs_dir / task_id
++    run_dir.mkdir(parents=True, exist_ok=True)
++    data = {"kind": kind, "task_id": task_id, "title": title, "started_at": started_at, **extra}
++    (run_dir / "started.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
++    return run_dir
++
++
++def _write_terminal(run_dir: Path, name: str, recorded_at: str) -> Path:
++    """Write a terminal file under *run_dir/*."""
++    data = {"recorded_at": recorded_at}
++    (run_dir / name).write_text(json.dumps(data, indent=2), encoding="utf-8")
++    return run_dir / name
++
++
++# ---------------------------------------------------------------------------
++# The pure function
++# ---------------------------------------------------------------------------
++
++class CollectStatusTests(unittest.TestCase):
++    """Directly test *collect_status* over a hand-built temporary fixture."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++        self.now = datetime(2026, 8, 19, 10, 0, 0, tzinfo=timezone.utc)
++
++    def tearDown(self) -> None:
++        self.tmpdir.cleanup()
++
++    # -- running --
++
++    def test_running_compute_duration(self) -> None:
++        """started_at: 10:00, --now 10:05:30, no terminal file → 330.0."""
++        now = datetime(2026, 8, 19, 10, 5, 30, tzinfo=timezone.utc)
++        _write_started(self.runs, "r1", "task", "Running task",
++                       "2026-08-19T10:00:00+00:00")
++        result = collect_status(self.runs, now)
++        self.assertEqual(result["current"]["task_id"], "r1")
++        self.assertEqual(result["current"]["duration_seconds"], 330.0)
++        self.assertEqual(result["running"], [result["current"]])
++
++    def test_running_across_timezones(self) -> None:
++        """started_at +02:00 12:00, now +00:00 10:00:05 → 5.0 seconds."""
++        _write_started(self.runs, "tz", "task", "tz task",
++                       "2026-08-19T12:00:00+02:00")
++        now_utc = datetime(2026, 8, 19, 10, 0, 5, tzinfo=timezone.utc)
++        result = collect_status(self.runs, now_utc)
++        self.assertEqual(result["current"]["duration_seconds"], 5.0)
++
++    def test_current_is_newest_of_two(self) -> None:
++        """Two running runs; current is the one started last."""
++        _write_started(self.runs, "a", "task", "old",
++                       "2026-08-19T10:00:00+00:00")
++        _write_started(self.runs, "b", "task", "new",
++                       "2026-08-19T10:03:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["current"]["task_id"], "b")
++        self.assertEqual(len(result["running"]), 2)
++        # newest first
++        self.assertEqual(result["running"][0]["task_id"], "b")
++        self.assertEqual(result["running"][1]["task_id"], "a")
++
++    # -- finished --
++
++    def test_finished_task(self) -> None:
++        """Started 10:00, run.json recorded 10:06:32 → 392.0s, in recent."""
++        run_dir = _write_started(self.runs, "ft", "task", "Finished task",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:06:32+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertIsNone(result["current"])
++        self.assertEqual(result["recent"][0]["duration_seconds"], 392.0)
++        self.assertEqual(result["recent"][0]["finished_at"],
++                         "2026-08-19T10:06:32+00:00")
++        self.assertEqual(result["recent"][0]["task_id"], "ft")
++        self.assertEqual(result["running"], [])
++
++    def test_finished_review(self) -> None:
++        """review.json marks a review as finished."""
++        run_dir = _write_started(self.runs, "fr", "review", "Review run",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "review.json", "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["recent"][0]["kind"], "review")
++        self.assertEqual(result["running"], [])
++
++    def test_finished_triage(self) -> None:
++        """triage.json marks a triage as finished."""
++        run_dir = _write_started(self.runs, "ftri", "triage", "Triage run",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "triage.json", "2026-08-19T10:02:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["recent"][0]["kind"], "triage")
++        self.assertEqual(result["running"], [])
++
++    # -- nothing running --
++
++    def test_nothing_running(self) -> None:
++        """Two finished runs, nothing in flight → current is None."""
++        run_dir_a = _write_started(self.runs, "a", "task", "A",
++                                   "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir_a, "run.json", "2026-08-19T10:01:00+00:00")
++        run_dir_b = _write_started(self.runs, "b", "task", "B",
++                                   "2026-08-19T09:00:00+00:00")
++        _write_terminal(run_dir_b, "run.json", "2026-08-19T09:02:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertIsNone(result["current"])
++        self.assertEqual(len(result["recent"]), 2)
++        # newest first by started_at
++        self.assertEqual(result["recent"][0]["task_id"], "a")
++        self.assertEqual(result["recent"][1]["task_id"], "b")
++
++    # -- cap recent at 10 --
++
++    def test_recent_capped_at_ten(self) -> None:
++        """Twelve finished runs → recent has exactly 10."""
++        for i in range(12):
++            run_dir = _write_started(self.runs, f"f{i}", "task", f"Run {i}",
++                                     f"2026-08-19T{10 + i:02d}:00:00+00:00")
++            _write_terminal(run_dir, "run.json",
++                            f"2026-08-19T{10 + i:02d}:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(len(result["recent"]), 10)
++        # Oldest (f0) should not be present
++        ids = [r["task_id"] for r in result["recent"]]
++        self.assertNotIn("f0", ids)
++        self.assertIn("f11", ids)
++
++    # -- unreadable --
++
++    def test_truncated_started_json(self) -> None:
++        """Truncated started.json goes to unreadable; other runs still listed."""
++        (self.runs / "bad-1").mkdir()
++        (self.runs / "bad-1" / "started.json").write_text(
++            '{"kind": "task", "title": ', encoding="utf-8")
++        run_dir = _write_started(self.runs, "g", "task", "Good",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "run.json",
++                        "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertIn("bad-1", result["unreadable"])
++        self.assertEqual(len(result["recent"]), 1)
++
++    def test_array_started_json(self) -> None:
++        """started.json containing [1, 2, 3] → unreadable, no traceback."""
++        (self.runs / "arr").mkdir()
++        (self.runs / "arr" / "started.json").write_text(
++            "[1, 2, 3]", encoding="utf-8")
++        # Make the directory a real run subdirectory so we can verify other
++        # runs are still listed alongside it.
++        _write_started(self.runs, "dummy", "task", "Dummy", "2026-08-19T10:00:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertIn("arr", result["unreadable"])
++
++    # -- ignored --
++
++    def test_no_started_json(self) -> None:
++        """Directory with run.json but no started.json → ignored."""
++        old = self.runs / "old"
++        old.mkdir()
++        (old / "run.json").write_text(
++            json.dumps({"recorded_at": "2026-08-19T09:00:00+00:00"}, indent=2),
++            encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["ignored"], 1)
++        self.assertEqual(result["running"], [])
++        self.assertEqual(result["recent"], [])
++
++    def test_stray_file_ignored(self) -> None:
++        """A stray file runs/notes.txt is not counted."""
++        (self.runs / "notes.txt").write_text("noise", encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["ignored"], 0)
++
++    # -- non-existent --runs --
++
++    def test_non_existent_runs_dir(self) -> None:
++        """Non-existent runs directory → empty result, exit 0, dir not created."""
++        gone = Path("/tmp/homelab_does_not_exist_48291")
++        self.assertFalse(gone.exists())
++        result = collect_status(gone, self.now)
++        self.assertIsNone(result["current"])
++        self.assertEqual(result["running"], [])
++        self.assertEqual(result["recent"], [])
++        self.assertFalse(gone.exists())
++
++
++# ---------------------------------------------------------------------------
++# CLI through subprocess
++# ---------------------------------------------------------------------------
++
++def _run_cli(subcommand_args: list[str], runs_dir: Path) -> subprocess.CompletedProcess[str]:
++    """Helper: run *scripts/status_page.py* against a fixture.
++
++    *subcommand_args* is everything after the subcommand name (e.g. ``["status", "--now", ...]``).
++    *runs_dir* is appended as the ``--runs`` flag so the script reads from the temporary fixture.
++    """
++    cmd = [sys.executable, str(SCRIPT), *subcommand_args, "--runs", str(runs_dir)]
++    return subprocess.run(cmd, capture_output=True, text=True)
++
++
++class CliTests(unittest.TestCase):
++    """Test the *status* sub-command through the CLI."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++
++    def tearDown(self) -> None:
++        self.tmpdir.cleanup()
++
++    def test_status_exits_0_and_parses_json(self) -> None:
++        """CLI status prints valid JSON and exits 0."""
++        run_dir = _write_started(self.runs, "c1", "task", "Cli task",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        proc = _run_cli(["status", "--now", "2026-08-19T10:02:00+00:00"], self.runs)
++        self.assertEqual(proc.returncode, 0)
++        data = json.loads(proc.stdout)
++        self.assertIn("current", data)
++        self.assertIn("recent", data)
++        self.assertIn("ignored", data)
++
++    def test_status_non_existent_runs(self) -> None:
++        """Non-existent --runs → empty result, exit 0, dir not created."""
++        gone = Path("/tmp/homelab_cli_gone_99281")
++        self.assertFalse(gone.exists())
++        proc = _run_cli(["status"], gone)  # --runs appended by helper
++        self.assertEqual(proc.returncode, 0)
++        data = json.loads(proc.stdout)
++        self.assertIsNone(data["current"])
++        self.assertFalse(gone.exists())
++
++
++# ---------------------------------------------------------------------------
++# HTTP server
++# ---------------------------------------------------------------------------
++
++class HttpServerTests(unittest.TestCase):
++    """Start the server on port 0 in a thread and exercise the endpoints."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++        self._populate_fixture()
++        self._start_server()
++
++    def _populate_fixture(self) -> None:
++        _write_started(self.runs, "http-1", "task", "Current run <b>x</b>",
++                       "2026-08-19T10:00:00+00:00")
++        run_dir2 = _write_started(self.runs, "http-2", "task", "Finished run",
++                                  "2026-08-19T09:00:00+00:00")
++        _write_terminal(run_dir2, "run.json", "2026-08-19T09:05:00+00:00")
++
++    def _start_server(self) -> None:
++        from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
++
++        now = datetime.now(timezone.utc)
++        # Bind *_runs_dir* and *_now* as *class* attributes so every handler
++        # instance can read them — mimics the pattern in _cmd_serve().
++        self._handler_class = type(
++            "_TestStatusHandler",
++            (_StatusHandler,),
++            {"_runs_dir": self.runs, "_now": now},
++        )
++        self.server = ThreadingHTTPServer((DEFAULT_HOST, 0), self._handler_class)
++        self.port = self.server.server_address[1]
++        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
++        self.server_thread.start()
++
++    def tearDown(self) -> None:
++        self.server.shutdown()
++        self.tmpdir.cleanup()
++
++    def test_status_json_200(self) -> None:
++        """GET /status.json → 200, correct Content-Type, valid JSON."""
++        resp = urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        self.assertEqual(resp.status, 200)
++        self.assertTrue(resp.headers.get("Content-Type", "").startswith("application/json"))
++        data = json.loads(resp.read().decode())
++        self.assertIn("current", data)
++        self.assertIn("generated_at", data)
++
++    def test_html_200_contains_current_title(self) -> None:
++        """GET / → 200, Content-Type text/html, body contains the current run's title."""
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        self.assertEqual(resp.status, 200)
++        self.assertTrue(resp.headers.get("Content-Type", "").startswith("text/html"))
++        body = resp.read().decode()
++        self.assertIn("Current run", body)
++
++    def test_html_escapes_html_in_title(self) -> None:
++        """Current title <b>x</b> → body contains &lt;b&gt;x&lt;/b&gt; not <b>x</b>."""
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++        self.assertIn("&lt;b&gt;x&lt;/b&gt;", body)
++        self.assertNotIn("<b>x</b>", body)
++
++    def test_404(self) -> None:
++        """GET /nope → 404."""
++        try:
++            urlopen(f"http://127.0.0.1:{self.port}/nope")
++            self.fail("Expected URLError")
++        except Exception as exc:
++            # urllib raises HTTPError for 4xx/5xx; check status code.
++            self.assertTrue(hasattr(exc, "code") and exc.code == 404,
++                            f"Unexpected error: {exc}")
++
++    def test_status_json_consistent_with_pure_function(self) -> None:
++        """HTTP /status.json body (minus generated_at) equals collect_status output."""
++        now = datetime.now(timezone.utc)
++        # Patch the handler class so the running server uses our fixed clock.
++        self._handler_class._now = now
++
++        expected = collect_status(self.runs, now)
++
++        resp = urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        data = json.loads(resp.read().decode())
++
++        # generated_at is always different (computed at response time)
++        expected.pop("generated_at")
++        data.pop("generated_at")
++        self.assertEqual(data, expected)
++
++    def test_serve_and_status_never_write(self) -> None:
++        """collect_status and HTTP requests must not create or modify any file."""
++
++        def _snapshot() -> set[str]:
++            paths = set()
++            for p in self.runs.rglob("*"):
++                if p.is_file():
++                    paths.add(str(p))
++            return paths
++
++        before = _snapshot()
++
++        # collect_status
++        self._handler_class._now = datetime.now(timezone.utc)
++        collect_status(self.runs, self._handler_class._now)
++
++        # HTTP requests
++        urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        urlopen(f"http://127.0.0.1:{self.port}/")
++        urlopen(f"http://127.0.0.1:{self.port}/status.json")
++
++        after = _snapshot()
++        self.assertEqual(before, after,
++                         f"Files changed: +{after - before} -{before - after}")
++
++    def test_collect_status_does_not_create_directory(self) -> None:
++        """collect_status must NOT create the runs directory if it does not exist.
++
++        If ``runs_dir.mkdir(parents=True, exist_ok=True)`` is inserted at the top
++        of *collect_status*, this test will fail.
++        """
++        gone = Path(tempfile.mkdtemp()) / "does_not_exist_38491"
++        self.assertFalse(gone.exists())
++        collect_status(gone)
++        self.assertFalse(gone.exists(),
++                         "collect_status created the runs directory")
++
++
++# ---------------------------------------------------------------------------
++# Duration formatting edge cases
++# ---------------------------------------------------------------------------
++
++class DurationFormatTests(unittest.TestCase):
++    """Test _format_duration for edge cases."""
++
++    def test_round_minutes(self) -> None:
++        from status_page import _format_duration
++        self.assertEqual(_format_duration(330.0), "5:30")
++
++    def test_single_second(self) -> None:
++        from status_page import _format_duration
++        self.assertEqual(_format_duration(5.0), "0:05")
++
++    def test_exceeds_one_hour(self) -> None:
++        """62 minutes → 62:00, not 1:02:00."""
++        from status_page import _format_duration
++        self.assertEqual(_format_duration(3723.0), "62:03")
++
++    def test_zero(self) -> None:
++        from status_page import _format_duration
++        self.assertEqual(_format_duration(0.0), "0:00")
++
++
++if __name__ == "__main__":
++    unittest.main()

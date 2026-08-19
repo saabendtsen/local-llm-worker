@@ -758,6 +758,10 @@ def main() -> int:
                     current_prompt, encoding="utf-8")
 
         record["elapsed_seconds"] = round(time.monotonic() - started, 1)
+        # Stamped when the triage *ends*, like every other runner; the status
+        # page computes finished durations as recorded_at - started_at, and the
+        # first f03 triage showed as 0:01 because this was set at the start.
+        record["recorded_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         # The frontier was told not to touch anything, and its tool set should
         # have made that impossible. Check anyway: a triage that edited the

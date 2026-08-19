@@ -1,0 +1,9 @@
+{
+  "kind": "task",
+  "task_id": "f03-fix-07-naive-now",
+  "title": "a `--now` without a UTC offset must not traceback",
+  "started_at": "2026-08-19T18:46:14+00:00",
+  "category": "bugfix",
+  "branch": "worker/f03-fix-07",
+  "harness": "pi"
+}
