@@ -839,12 +839,42 @@ One caution from my own verification: my first attempt anchored the `mkdir` at t
 silently proved nothing — a passing test that tested nothing, which is precisely the failure class
 this project keeps finding. Verify-don't-trust applies to the verifier too.
 
-### Not yet run
+### Addendum, 2026-08-19 — five more cycles, written by the triage step
 
-Test-only fix tasks for findings 4/5/7 (merged: `--limit`/`--state` interaction and `--state`
-repeatability unpinned) and 8 (`places=2` too lenient for the `3.501` case); finding 6 (mixed
-`run_id` types in the sort) is a real, narrow defect also still open; finding 10 deferred (needs
-`datetime.now` mocking, low value); 9 and 11 dropped.
+The remaining findings were not converted by hand. `scripts/run_triage.py --frontier claude`
+produced the tasks (record in `runs/tr-f02-claude/`, see [../docs/pipeline-design.md](../docs/pipeline-design.md)),
+and the five that were still open — the three defects had already been fixed by hand — were
+re-chained onto `worker/f02-fix-03` and run back to back:
+
+| Cycle | Task (triage-generated) | Elapsed | Diff | Suite | Mutation check |
+| --- | --- | --- | --- | --- | --- |
+| auto-02 | sort key robust to non-string `run_id` (finding 6, **defect**) | 219 s | +53 / −1, one-line fix + 2 tests | 180 | n/a |
+| auto-05 | pin `--state` before `--limit` (4+7) | 449 s | +95, tests only | 183 | swapped the two blocks → `AssertionError: 1 != 0`, restored |
+| auto-06 | pin `--state` repeatability (5) | 246 s | +51, tests only | 186 | `action="append"` → `nargs="*"` → two tests fail, restored |
+| auto-07 | `places=2` → exact `3.501` (8) | 148 s | +1 / −1 | 186 | `round(…, 3)` → `round(…, 2)` → `3.501 != 3.5`, restored |
+| auto-08 | pin the `abandoned` flag (10) | 305 s | +79, tests only | 190 | grace comparison → `if False:` → `False is not true`, restored |
+
+Eight fix cycles on one feature, all in scope, all green, `scripts/wayfinder_autopilot.py` touched
+only by the cycles allowed to touch it. Tip `worker/f02-auto-fix-08`: 190 passed, ruff clean,
+confirmed in a throwaway worktree; auto-07's mutation reproduced there (`1 failed, 59 passed`).
+
+Three things worth keeping:
+
+- **Triage-written tasks run as well as hand-written ones.** Same shape, same bounded framing, the
+  mutation named in advance — and every cycle performed it. The frontier-by-CLI step is not a
+  degraded version of the hand process; on this evidence it is the hand process.
+- **The worker reports what it saw, not what it was told to expect.** auto-06's task predicted the
+  mutated CLI case "returns 1 run instead of 4"; the worker reported `4 != 3`, which is what
+  actually happens (`nargs="*"` keeps the last `--state`, leaving three completed runs). The
+  frontier's prediction was off; the worker did not echo it. That is the honesty property the
+  whole loop depends on, observed rather than assumed.
+- **A collection leak, found by the count.** auto-02's verify reported 247 passed against 180
+  tests. The experiment repo's new `tests/` directory sits inside the workspace checkout, and
+  pytest at the workspace root collected it too. Fixed with a `conftest.py` that ignores the
+  directory when rootdir is elsewhere; later cycles report the true count. A number that did
+  not add up was the only signal.
+
+The loop holds past three. Eight is the new floor, with no drift in scope and no regression.
 
 ### Verdict
 
@@ -860,7 +890,7 @@ frontier one. What E8 changes in the pipeline:
    mutation, require the worker to run it, require the failure text in the summary. It costs about
    a minute and turns "the test passes" into "the test discriminates".
 3. **Fix cycles stay bounded and sequential**, one finding per cycle, each branching from the last.
-   Three in a row held without drift; the remaining ones will tell whether it holds past three.
+   Eight in a row held without drift — three hand-written, five triage-generated.
 
 ---
 

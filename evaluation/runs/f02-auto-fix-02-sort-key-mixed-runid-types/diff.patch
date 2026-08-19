@@ -1,0 +1,83 @@
+diff --git a/scripts/wayfinder_autopilot.py b/scripts/wayfinder_autopilot.py
+index 32180cd..d340da5 100644
+--- a/scripts/wayfinder_autopilot.py
++++ b/scripts/wayfinder_autopilot.py
+@@ -916,7 +916,7 @@ def list_runs(config: AutopilotConfig, *, limit: int | None = None, states: list
+             }
+             entries.append(entry)
+     # run_id is fixed-width timestamp, so lexicographic reverse == newest first
+-    entries.sort(key=lambda e: e["run_id"], reverse=True)
++    entries.sort(key=lambda e: str(e["run_id"]), reverse=True)
+     if states:
+         entries = [e for e in entries if e["state"] in states]
+     if limit is not None:
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index c94d9c8..cbdee36 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -749,6 +749,32 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+         self.assertEqual("unreadable", entry["state"])
+         self.assertEqual("failed to parse run.json", entry["error"])
+ 
++    def test_list_runs_handles_int_run_id_with_unreadable(self):
++        """Sorting must not raise when run_id is int in one entry and str in another."""
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        # int run_id
++        int_id = "20260816T120000-000000"
++        rd = runs_dir / int_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({"run_id": 123, "state": "completed"}),
++            encoding="utf-8",
++        )
++        # unreadable run
++        bad_id = "20260817T120000-000000"
++        bad_rd = runs_dir / bad_id
++        bad_rd.mkdir()
++        bad_rd.joinpath("run.json").write_text(
++            "NOT JSON",
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        self.assertEqual("ok", result["state"])
++        self.assertEqual(2, len(result["runs"]))
++        states = {r["state"] for r in result["runs"]}
++        self.assertEqual({"completed", "unreadable"}, states)
++
+     def test_list_runs_handles_valid_run_beside_non_dict(self):
+         runs_dir = self.logs / "runs"
+         runs_dir.mkdir(parents=True)
+@@ -1067,6 +1093,32 @@ class HistoryCLIIntegrationTests(unittest.TestCase):
+         states = {r["state"] for r in data["runs"]}
+         self.assertIn("unreadable", states)
+ 
++    def test_cli_history_int_run_id_with_unreadable(self):
++        """CLI history must not raise when run_id is int in one run and unreadable in another."""
++        # int run_id
++        int_id = "20260822T120000-000000"
++        rd = self.runs_dir / int_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({"run_id": 123, "state": "completed"}),
++            encoding="utf-8",
++        )
++        # unreadable run
++        bad_id = "20260823T120000-000000"
++        bad_rd = self.runs_dir / bad_id
++        bad_rd.mkdir()
++        bad_rd.joinpath("run.json").write_text(
++            "NOT JSON",
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(["history"], self.workspace)
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual("ok", data["state"])
++        self.assertEqual(5, len(data["runs"]))
++        states = {r["state"] for r in data["runs"]}
++        self.assertEqual({"completed", "unreadable"}, states)
++
+     def test_cli_history_non_dict_run_json_exits_0(self):
+         rd = self.runs_dir / "20260821T120000-000000"
+         rd.mkdir()

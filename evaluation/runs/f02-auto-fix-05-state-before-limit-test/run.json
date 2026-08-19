@@ -1,0 +1,51 @@
+{
+  "task_id": "f02-auto-fix-05-state-before-limit-test",
+  "category": "tests",
+  "complexity": "small",
+  "recorded_at": "2026-08-19T11:39:38+00:00",
+  "repo": "C:\\Dev\\homelab",
+  "branch": "worker/f02-auto-fix-05",
+  "base_commit": "d60bb34e46db9b9849ab561da1afaa0af1676853",
+  "work_commit": "bb84777e65b52851a29475135368e8957ba56c82",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f02-auto-fix-05-state-before-limit-test.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 448.6,
+    "exit_code": 0,
+    "timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 3292,
+    "received_chars": 3292,
+    "reason": null
+  },
+  "events": {
+    "turns": 16,
+    "tool_calls": 16,
+    "tools_used": {
+      "bash": 10,
+      "read": 3,
+      "edit": 3
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 1,
+    "lines_added": 95,
+    "lines_removed": 0,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m ruff check scripts tests && python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": "All checks passed!\n.................................................................... [ 37%]\n................................................................. [ 72%]\n..................................................                       [100%]\n183 passed, 11 subtests passed in 38.00s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}

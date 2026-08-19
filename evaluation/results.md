@@ -65,6 +65,11 @@ behavioural finding it produced is recorded under [Findings](#findings).
 | f02-fix-01 | non-dict `run.json` | bugfix | 9 | passed | **clean** | 393 s | correct, in scope, duplicated sentinel dict |
 | f02-fix-02 | `abandoned` key on unreadable entries | bugfix | 8 | passed | **clean** | 314 s | fixed both duplicate sites unprompted |
 | f02-fix-03 | pin read-only constraint | tests | 14 | passed | **clean** | 250 s | snapshot test; mutation self-check done and independently confirmed |
+| f02-auto-fix-02 | sort key, mixed `run_id` types | bugfix | 8 | passed | **clean** | 219 s | triage-generated task; one-line fix + 2 tests |
+| f02-auto-fix-05 | pin `--state` before `--limit` | tests | 16 | passed | **clean** | 449 s | triage-generated; mutation check done |
+| f02-auto-fix-06 | pin `--state` repeatable | tests | 15 | passed | **clean** | 246 s | triage-generated; reported actual failure, not the predicted one |
+| f02-auto-fix-07 | exact `3.501` assertion | tests | 18 | passed | **clean** | 148 s | triage-generated; mutation independently confirmed |
+| f02-auto-fix-08 | pin `abandoned` flag | tests | 23 | passed | **clean** | 305 s | triage-generated; mutation check done |
 
 Outcome is one of: clean / minor repair / major repair / takeover / harness failure.
 See [README.md](README.md) for what each means. Score from the diff, not from `verify.passed`.

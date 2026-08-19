@@ -1,0 +1,69 @@
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index 0da2749..fa8c484 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -16,6 +16,7 @@ from wayfinder_autopilot import (  # noqa: E402
+     RunLock,
+     build_environment,
+     build_codex_command,
++    build_parser,
+     build_prompt,
+     load_issue_details,
+     load_queue_snapshot,
+@@ -1225,6 +1226,56 @@ class HistoryCLIIntegrationTests(unittest.TestCase):
+         states = {r["state"] for r in data["runs"]}
+         self.assertIn("unreadable", states)
+ 
++    def test_cli_history_multiple_states(self):
++        """--state may be supplied multiple times; both filters apply.
++
++        The fixture provides three completed runs (20260816-20260818).
++        This test adds one failed run (20260819) so the full tree has
++        four runs.  Passing ``--state failed --state completed`` must
++        return all four runs with both states represented.
++        """
++        rd = self.runs_dir / "20260819T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": "20260819T120000-000000",
++                "state": "failed",
++                "dry_run": False,
++                "started_at": "2026-08-16T15:55:03+02:00",
++                "finished_at": "2026-08-16T15:55:07+02:00",
++                "exit_code": 1,
++                "workspace": str(self.workspace),
++            }),
++            encoding="utf-8",
++        )
++        proc = _run_wayfinder_cli(
++            ["history", "--state", "failed", "--state", "completed"],
++            self.workspace,
++        )
++        self.assertEqual(0, proc.returncode)
++        data = json.loads(proc.stdout)
++        self.assertEqual(4, len(data["runs"]))
++        self.assertEqual(
++            {"failed", "completed"},
++            {r["state"] for r in data["runs"]},
++        )
++
++
++def test_parse_args_state_append():
++    """--state appended multiple times yields a list in CLI order."""
++    parser = build_parser()
++    args = parser.parse_args(
++        ["history", "--state", "failed", "--state", "completed"]
++    )
++    assert args.state == ["failed", "completed"]
++
++
++def test_parse_args_no_state_is_none():
++    """When --state is omitted the parsed value is None."""
++    parser = build_parser()
++    args = parser.parse_args(["history"])
++    assert args.state is None
++
+ 
+ 
+ 

@@ -1,0 +1,119 @@
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index cbdee36..0da2749 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -623,6 +623,62 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+         result_multi = list_runs(self.config, states=["completed", "failed"])
+         self.assertEqual(3, len(result_multi["runs"]))
+ 
++    def test_list_runs_state_filter_before_limit(self):
++        """Filtering by state must happen before slicing by limit.
++
++        Four runs: 20260816T completed, 20260817T failed,
++        20260818T completed, 20260819T completed.
++        ``list_runs(states=["failed"], limit=1)`` must return exactly the
++        single failed run (20260817), not the empty list that results when
++        ``[:limit]`` runs before the state filter.
++        """
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id, state in [
++            ("20260816T120000-000000", "completed"),
++            ("20260817T120000-000000", "failed"),
++            ("20260818T120000-000000", "completed"),
++            ("20260819T120000-000000", "completed"),
++        ]:
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": state}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config, states=["failed"], limit=1)
++        self.assertEqual(1, len(result["runs"]))
++        self.assertEqual("20260817T120000-000000", result["runs"][0]["run_id"])
++        self.assertEqual("failed", result["runs"][0]["state"])
++
++    def test_list_runs_limit_succeeds_completed_after_state_filter(self):
++        """Limit must select from the state-filtered set.
++
++        Same four runs as above.  ``list_runs(states=["completed"], limit=2)``
++        must return the two newest completed runs (20260819, 20260818),
++        not the two newest runs overall (which would include the failed one).
++        """
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        for run_id, state in [
++            ("20260816T120000-000000", "completed"),
++            ("20260817T120000-000000", "failed"),
++            ("20260818T120000-000000", "completed"),
++            ("20260819T120000-000000", "completed"),
++        ]:
++            rd = runs_dir / run_id
++            rd.mkdir()
++            (rd / "run.json").write_text(
++                json.dumps({"run_id": run_id, "state": state}),
++                encoding="utf-8",
++            )
++        result = list_runs(self.config, states=["completed"], limit=2)
++        self.assertEqual(2, len(result["runs"]))
++        self.assertEqual(
++            ["20260819T120000-000000", "20260818T120000-000000"],
++            [r["run_id"] for r in result["runs"]],
++        )
++
+     def test_list_runs_computes_duration_for_completed_run(self):
+         runs_dir = self.logs / "runs"
+         runs_dir.mkdir(parents=True)
+@@ -1059,6 +1115,43 @@ class HistoryCLIIntegrationTests(unittest.TestCase):
+         self.assertEqual(1, len(data["runs"]))
+         self.assertEqual("failed", data["runs"][0]["state"])
+ 
++    def test_cli_history_state_and_limit(self):
++        """--state must filter before --limit slices.
++
++        Fixture has three completed runs (20260816-20260818).  We add one
++        failed run (20260819) to the fixture so that filtering for
++        ``--state failed`` then limiting to ``--limit 1`` returns the
++        single failed run.  If ``[:limit]`` ran before the state filter
++        the result would be ``[]``.
++        """
++        rd = self.runs_dir / "20260819T120000-000000"
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": "20260819T120000-000000",
++                "state": "failed",
++                "dry_run": False,
++                "started_at": "2026-08-16T15:55:03+02:00",
++                "finished_at": "2026-08-16T15:55:07+02:00",
++                "exit_code": 1,
++                "workspace": str(self.workspace),
++            }),
++            encoding="utf-8",
++        )
++        try:
++            proc = _run_wayfinder_cli(
++                ["history", "--state", "failed", "--limit", "1"], self.workspace
++            )
++            self.assertEqual(0, proc.returncode)
++            data = json.loads(proc.stdout)
++            self.assertEqual(1, len(data["runs"]))
++            self.assertEqual("20260819T120000-000000", data["runs"][0]["run_id"])
++            self.assertEqual("failed", data["runs"][0]["state"])
++        finally:
++            import shutil
++            if rd.exists():
++                shutil.rmtree(rd)
++
+     def test_cli_history_no_runs_directory(self):
+         # Create workspace without logs/runs
+         workspace = self.root / "clean"
+@@ -1133,5 +1226,7 @@ class HistoryCLIIntegrationTests(unittest.TestCase):
+         self.assertIn("unreadable", states)
+ 
+ 
++
++
+ if __name__ == "__main__":
+     unittest.main()

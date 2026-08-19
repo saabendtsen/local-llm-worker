@@ -1,0 +1,13 @@
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index fa8c484..6e98d94 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -697,7 +697,7 @@ Path(args[args.index('-o') + 1]).write_text(prompt, encoding='utf-8')
+         )
+         result = list_runs(self.config)
+         entry = result["runs"][0]
+-        self.assertAlmostEqual(3.501, entry["duration_seconds"], places=2)
++        self.assertEqual(3.501, entry["duration_seconds"])
+ 
+     def test_list_runs_computes_duration_across_utc_offset_change(self):
+         runs_dir = self.logs / "runs"

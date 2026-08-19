@@ -1,0 +1,90 @@
+diff --git a/tests/test_wayfinder_autopilot.py b/tests/test_wayfinder_autopilot.py
+index 6e98d94..96580e1 100644
+--- a/tests/test_wayfinder_autopilot.py
++++ b/tests/test_wayfinder_autopilot.py
+@@ -963,6 +963,85 @@ Path(args[args.index('-o') + 1]).write_text('done', encoding='utf-8')
+         self.assertTrue(normal["dry_run"])
+         self.assertEqual(0, normal["exit_code"])
+ 
++    def test_list_runs_abandoned_stale_running_run(self):
++        """A running run with started_at decades ago is abandoned=True."""
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260816T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "running",
++                "started_at": "2000-01-01T00:00:00+00:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertTrue(entry["abandoned"])
++        self.assertIsNone(entry["duration_seconds"])
++
++    def test_list_runs_abandoned_fresh_running_run(self):
++        """A running run with started_at decades in the future is not abandoned."""
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260817T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "running",
++                "started_at": "2099-01-01T00:00:00+00:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertFalse(entry["abandoned"])
++
++    def test_list_runs_abandoned_completed_run_is_false(self):
++        """A completed run is never abandoned regardless of age."""
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260818T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "completed",
++                "started_at": "2000-01-01T00:00:00+00:00",
++                "finished_at": "2000-01-01T00:00:10+00:00",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertFalse(entry["abandoned"])
++        self.assertEqual(10.0, entry["duration_seconds"])
++
++    def test_list_runs_abandoned_malformed_timestamp_is_false(self):
++        """A running run with an unparseable started_at does not raise."""
++        runs_dir = self.logs / "runs"
++        runs_dir.mkdir(parents=True)
++        run_id = "20260819T120000-000000"
++        rd = runs_dir / run_id
++        rd.mkdir()
++        (rd / "run.json").write_text(
++            json.dumps({
++                "run_id": run_id,
++                "state": "running",
++                "started_at": "not-a-timestamp",
++            }),
++            encoding="utf-8",
++        )
++        result = list_runs(self.config)
++        entry = result["runs"][0]
++        self.assertFalse(entry["abandoned"])
++
+ 
+ def subprocess_result(returncode, stdout="", stderr=""):
+     class Result:
