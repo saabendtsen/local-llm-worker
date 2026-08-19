@@ -1,0 +1,74 @@
+---
+id: f03-fix-08-frozen-clock
+repo: C:\Dev\homelab\experiments\local-llm-worker
+category: bugfix
+complexity: small
+verify: python -m ruff check scripts tests && python -m pytest -q
+base: main
+branch: worker/f03-fix-08
+---
+
+# Task: the served page must use the request time, not the server's start time
+
+**Edit `scripts/status_page.py` and `tests/test_status_page.py`. Nothing else.**
+
+A single bounded fix. Do not refactor, do not improve anything the task does not name, and do not
+touch any other finding.
+
+## Current behavior
+
+`_cmd_serve` builds the handler class once with `"_now": datetime.now(timezone.utc)`
+(`scripts/status_page.py`, in `_cmd_serve`), and both `_serve_json` and `_serve_html` pass
+`self._now` to `collect_status`. So every response is computed **as of the moment the server
+started**:
+
+- `generated_at` never changes between requests;
+- a run that starts after the server started has `duration_seconds` **negative** — observed live:
+  server started 18:51:43, a triage started 19:15:23, `/status.json` reported
+  `"duration_seconds": -1419.6`;
+- a running run's elapsed time never advances, so the page the spec asked for — "what the worker
+  is doing right now, and for how long" — is wrong for its one purpose.
+
+The reviewers saw the symptom ("negative duration accepted silently", finding 6) and triage
+deferred it as a design question about negative values. It was not; the clock is frozen.
+
+## Desired behavior
+
+Every request computes `now = datetime.now(timezone.utc)` at request time. `generated_at` moves
+between requests, and a run that started after the server did has a non-negative, growing
+`duration_seconds`. The `status` subcommand and `--now` are unaffected.
+
+## Out of scope
+
+- Do not change the output schema, the HTML, `collect_status`, `--now`, or anything else.
+- Do not clamp or validate negative durations — with a live clock they no longer arise from this
+  cause, and the deferred design question stays deferred.
+- Do not address any other review finding.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| Start the server, `GET /status.json`, sleep ≥ 1.1 s, `GET /status.json` again | the second `generated_at` parses to a **later** `datetime` than the first — `datetime.fromisoformat`, not string comparison |
+| Start the server **first**, then write a `started.json` whose `started_at` is `datetime.now(timezone.utc)` at write time, then `GET /status.json` | `current["duration_seconds"] >= 0` — this is the observed defect in miniature |
+| `GET /` after the same sequence | status 200, and the elapsed cell shows `_format_duration` of a non-negative number (assert the body does not contain `-0:` or `-1:`) |
+| `status --now 2026-08-19T10:05:00+00:00` against a running run started `10:00:00+00:00` | still `300.0` — pin that `--now` is untouched |
+
+## Acceptance criteria
+
+- [ ] Every case above passes.
+- [ ] The first case **fails** if `now` is captured once at server start instead of per request.
+      Verify this yourself: restore the frozen behaviour, watch the test fail, re-apply the fix,
+      and quote the failure in your summary.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline on `main` is
+      **116 passed, 6 subtests passed**, ruff clean, so any other failure is a regression.
+- [ ] Return a concise summary of what changed and anything left unresolved.
+
+## Notes
+
+- The narrowest change: drop `_now` from the handler class attributes and call
+  `datetime.now(timezone.utc)` inside `_serve_json` / `_serve_html` (or a tiny shared helper on
+  the handler). Keep the `_runs_dir` attribute as it is.
+- Tests in `HttpServerTests` already start a `ThreadingHTTPServer` on port 0 in a thread and shut it
+  down in `tearDown`; follow that fixture. `time.sleep(1.1)` is acceptable in exactly one test.
+- Ruff runs before pytest; an unused import fails the acceptance command.
