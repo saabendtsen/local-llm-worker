@@ -326,6 +326,17 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(data["current"])
         self.assertFalse(gone.exists())
 
+    def test_status_invalid_now(self) -> None:
+        """Unparseable --now → exit 2, error on stderr naming --now, no traceback."""
+        proc = _run_cli(
+            ["status", "--now", "not-a-date"],
+            self.runs,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--now", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn("invalid", proc.stderr.lower())
+
 
 # ---------------------------------------------------------------------------
 # HTTP server

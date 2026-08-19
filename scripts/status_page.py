@@ -162,7 +162,7 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
 
 def _cmd_status(args: argparse.Namespace) -> int:
     runs_dir = args._runs if args._runs else Path(__file__).resolve().parent.parent / "evaluation" / "runs"
-    now = datetime.fromisoformat(args.now) if args.now else None
+    now = args.now
     result = collect_status(runs_dir, now)
     print(json.dumps(result, indent=2))
     return 0
@@ -295,7 +295,7 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="_runs",
         help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
     )
-    st.add_argument("--now", help="pin the current time as ISO-8601 (for tests)")
+    st.add_argument("--now", type=datetime.fromisoformat, help="pin the current time as ISO-8601 (for tests)")
     st.set_defaults(func=_cmd_status)
 
     sv = sub.add_parser("serve", help="run a loopback HTTP server")
