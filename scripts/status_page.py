@@ -31,6 +31,14 @@ DEFAULT_PORT = 8765
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _port_number(text: str) -> int:
+    """Validate a port number in the range 0..65535."""
+    value = int(text)
+    if value < 0 or value > 65535:
+        raise argparse.ArgumentTypeError("port must be 0-65535")
+    return value
+
+
 def _format_duration(seconds: float) -> str:
     """Format seconds as *m:ss*.  No hours prefix — 1 h 2 m 3 s → *62:03*."""
     total = int(seconds)
@@ -307,7 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="path to the evaluation/runs directory (defaults to evaluation/runs next to this script)",
     )
     sv.add_argument("--host", default=DEFAULT_HOST, help="bind address (default: loopback only)")
-    sv.add_argument("--port", type=int, default=DEFAULT_PORT, help="port to listen on")
+    sv.add_argument("--port", type=_port_number, default=DEFAULT_PORT, help="port to listen on")
     sv.set_defaults(func=_cmd_serve)
 
     return parser

@@ -337,6 +337,28 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("Traceback", proc.stderr)
         self.assertIn("invalid", proc.stderr.lower())
 
+    # -- invalid port
+
+    def test_serve_invalid_port_negative(self) -> None:
+        """serve --port -1 → exit 2, error naming --port, no traceback."""
+        proc = _run_cli(
+            ["serve", "--port", "-1"],
+            self.runs,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--port", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_serve_invalid_port_too_large(self) -> None:
+        """serve --port 70000 → exit 2, error naming --port, no traceback."""
+        proc = _run_cli(
+            ["serve", "--port", "70000"],
+            self.runs,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--port", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
 
 # ---------------------------------------------------------------------------
 # HTTP server
