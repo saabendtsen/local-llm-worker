@@ -201,3 +201,76 @@ rest as advisory.
 
 One finding per cycle; the fix may only touch what its finding names; re-verify with tests, the
 linter, and the finding's own `repro` command rather than a second review.
+
+---
+
+# Built, after E8
+
+The E7 proposals above are implemented and the whole chain has run once end to end on a fresh
+feature (E8, [../evaluation/experiments.md](../evaluation/experiments.md)). What exists now, and the
+three things E8 changed.
+
+## The triage step is real, and the pipeline owns it
+
+`prompts/triage.md` is the triage prompt; `scripts/run_triage.py` invokes the frontier model with
+it:
+
+```
+python scripts/run_triage.py --findings <findings.json> --spec <task.md> --branch <reviewed-branch> \
+    --id tr-<spec> --frontier claude|codex|cmd:<template> [--task-prefix ...] [--baseline "..."]
+```
+
+- The prompt goes in on **stdin**, never argv — Windows caps a command line at 32767 characters and
+  a triage prompt with the diff inlined is ~50k.
+- The model runs **read-only** (`--tools Read,Grep,Glob` for Claude, `--sandbox read-only` for
+  Codex) in a **detached worktree** at `C:\Dev\homelab-worktrees\triage-<id>`, so it can verify
+  findings against source but cannot touch anything. `git status --porcelain` must be empty
+  afterwards or the run fails.
+- Output is **one JSON block** matching a strict contract: every input finding appears in exactly one
+  disposition; a disposition is `fix`, `fix-test-only`, `defer` or `drop`; a task object is present
+  iff the disposition is a fix; a `fix-test-only` task must name its `mutation_check`; `order` is a
+  permutation of the task indexes. Validated by hand, no schema library. A rejected answer is
+  re-sent with the validation errors appended, up to `--max-attempts`; a run that never validates
+  writes no task files and exits non-zero. **A step that cannot fail loudly fails quietly** — this
+  one fails loudly.
+- Accepted dispositions are rendered into `evaluation/tasks/<prefix>-fix-NN-<slug>.md` in the
+  template shape, **chained**: fix-01 bases on the reviewed branch, fix-02 on fix-01's branch, and
+  so on, following `order`. Test-only tasks get "do not modify `<implementation file>` at all", the
+  mutation self-check as an acceptance criterion, and a `git status` criterion.
+
+The prompt encodes the three rules the hand triage in
+[../evaluation/f02-triage.md](../evaluation/f02-triage.md) earned: **verify each finding against
+the source before converting it** (a `problem:` field is a claim, and one in eleven described the
+reviewer's mutated state as the current one); **classify defect versus test gap explicitly**, since
+the task differs completely; **merge across axes**, which the aggregator deliberately does not do.
+
+First live run, Claude over the f02 findings: validated on the first attempt in 168 s; caught the
+inverted finding unaided, with the correct line cited; matched the hand triage on every other
+disposition except two defensible differences. Record in `evaluation/runs/tr-f02-claude/`.
+
+## The mutation self-check is now part of the template
+
+For every task that adds a test, the task names the mutation — "inserting X at Y makes the new test
+fail" — and requires the worker to run it, restore the source, and quote the failure in its summary.
+E6 found the worker never does this unprompted; E8's fix-03 found it does it correctly and reports
+it honestly when asked, and the claim reproduced independently. The triage renderer emits this
+criterion for every `fix-test-only` task; the template says so for hand-written ones.
+
+## Fix cycles: still one finding each, chained, bounded
+
+Three fix cycles in E8 held without drift. The "do not refactor" constraint cost tidiness once
+(fix-01 duplicated a dict) and never correctness (fix-02 then found both copies unprompted, though
+its task named neither). So bounded tasks do not need to enumerate sites a previous fix may have
+created. Whether the loop holds past three cycles is the next measurement — the five
+triage-generated f02 tasks, chained onto the three hand-written ones, are that test.
+
+## Still open
+
+- **Findings-only triage.** Every triage so far had the diff inlined. Whether quality survives
+  findings-plus-repo-access without the diff is untested, and it is the cheaper configuration.
+- **Codex as `--frontier`.** Implemented from `codex exec --help`, not exercised. The A/B that
+  compared harnesses applies: run a repeat arm, within-model variance has swamped between-model
+  differences every time.
+- **Baseline propagation.** Only the first generated task carries the measured suite baseline; later
+  ones say "the suite is green on the base branch". The runner could read the previous run's
+  `run.json` and fill the number in.

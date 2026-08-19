@@ -8,20 +8,28 @@ Tracked by [homelab-workspace#74](https://github.com/saabendtsen/homelab-workspa
 ## The loop
 
 ```text
-Claude                          Local worker (Pi + Qwen3.6 35B A3B)
+frontier (Claude today; pluggable)        local worker (Pi + Qwen3.6 35B A3B)        mechanical
   │
-  ├── writes a bounded task ────────►  explores the repository
-  │   (constraints + acceptance          implements on a throwaway branch
-  │    criteria, not a list of edits)    runs tests, iterates on failures
-  │                                                │
-  ◄──── diff, test result, metrics ────────────────┘
+  ├── writes a bounded task ─────────────►  implements on a throwaway branch
+  │                                         runs ruff + tests, iterates             run_task.py
+  │                                                    │
+  │                                         four fresh-context reviewers, one      run_review.py ×4
+  │                                         axis each, in isolated worktrees
+  │                                                    │
+  │                                                    ▼
+  │                                         findings ── union, dedupe, order ──►   aggregate_findings.py
+  │                                                    │
+  ◄──── triage: verify each finding against source, ──┘                            run_triage.py
+  │     defect vs test gap, merge, emit chained fix tasks
   │
-  └── reads the diff and scores the run
+  └──► one bounded fix task per finding ──►  fix on a branch off the last fix       run_task.py ×N
 ```
 
-Claude never writes the implementation and the worker never decides what "done" means. The
-`scripts/run_task.py` runner sits between them and gathers evidence; it deliberately makes no
-judgement about quality, because a runner that scored its own output would defeat the point.
+Judgement stays with the frontier model — writing the specification and triaging findings. The
+worker does the token-heavy parts: implementing, reviewing a diff it did not write, fixing one
+finding at a time. The runners between them gather evidence and make no judgement about quality.
+The pipeline owns every prompt, including the triage prompt, and calls the frontier model by CLI
+(`--frontier claude|codex|cmd:`), so the frontier model is a flag rather than a dependency.
 
 ## What this is
 
@@ -61,7 +69,12 @@ scripts\run-task.cmd evaluation\tasks\0001-example.md
 | `scripts/start-worker.cmd` | Launch the runtime |
 | `scripts/check-worker.cmd` | Health, model list, and a real completion |
 | `scripts/bench-worker.cmd` | Throughput baseline |
-| `scripts/run_task.py` | Execute one delegated task and record the evidence |
+| `scripts/run_task.py` | Execute one delegated task on a branch and record the evidence |
+| `scripts/run_batch.py` | Several atomic tasks on one branch, with a circuit breaker |
+| `scripts/run_review.py` | Fresh-context review of a diff, in a dedicated worktree; `--prompt` picks the axis |
+| `scripts/aggregate_findings.py` | Union the reviewers' findings, dedupe, order, enforce the confidence floor |
+| `scripts/run_triage.py` | Frontier triage by CLI, strict output contract, renders chained fix tasks |
+| `prompts/` | Every prompt the pipeline sends: four review axes, the broad review, triage |
 | `docs/runtime.md` | Model, backend, flag rationale, tuning |
 | `docs/harness-pi.md` | Pi configuration and observed worker behaviour |
 | `docs/using-small-models.md` | Standing reference: how to get useful work out of a small local model |
@@ -84,8 +97,11 @@ Measured: **~690 tok/s prompt processing, ~25 tok/s generation**, full 120k cont
 
 ## Status
 
-Phase 1 complete. The runtime is up, Pi drives it headless, and the worker has completed a real
-multi-file task — edits plus a passing test suite — unattended in under a minute.
+Phases 1–2 done; the pipeline has run end to end once (E8). Eight experiments recorded in
+[`evaluation/experiments.md`](evaluation/experiments.md), each with its hypothesis written before
+the result; [`docs/pipeline-design.md`](docs/pipeline-design.md) tracks the design and what each
+experiment changed. Short version: the worker builds real features from a well-formed task;
+fresh-context focused reviewers find real defects with almost no false positives; triage has to be
+a frontier step because one finding in eleven was inverted; and bounded one-finding fix cycles hold.
 
-Phase 2 is the evaluation: run 10–20 bounded tasks from real repositories and find where the
-reliable task horizon ends.
+Next: does the fix loop hold past three cycles, findings-only triage, Codex as a second frontier.
