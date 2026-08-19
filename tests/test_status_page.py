@@ -519,6 +519,67 @@ class HttpServerTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# HTTP server — idle (no current run)
+# ---------------------------------------------------------------------------
+
+class HttpIdleServerTests(unittest.TestCase):
+    """Start the server on port 0 with only finished runs and verify idle rendering."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.runs = Path(self.tmpdir.name) / "runs"
+        self.runs.mkdir()
+        self._populate_idle_fixture()
+        self._start_server()
+
+    def _populate_idle_fixture(self) -> None:
+        """One finished run, nothing in-flight."""
+        run_dir = _write_started(
+            self.runs, "done-1", "task", "Finished only",
+            "2026-08-19T09:00:00+00:00",
+        )
+        _write_terminal(run_dir, "run.json", "2026-08-19T09:05:00+00:00")
+
+    def _start_server(self) -> None:
+        from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
+
+        now = datetime.now(timezone.utc)
+        self._handler_class = type(
+            "_IdleStatusHandler",
+            (_StatusHandler,),
+            {"_runs_dir": self.runs, "_now": now},
+        )
+        self.server = ThreadingHTTPServer((DEFAULT_HOST, 0), self._handler_class)
+        self.port = self.server.server_address[1]
+        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.server_thread.start()
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.tmpdir.cleanup()
+
+    def test_idle_html(self) -> None:
+        """GET / when nothing is running → 200, text/html, idle + finished run in table."""
+        resp = urlopen(f"http://127.0.0.1:{self.port}/")
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(resp.headers.get("Content-Type", "").startswith("text/html"))
+        body = resp.read().decode()
+        # the idle sentinel
+        self.assertIn("idle", body)
+        # the finished run still shows in the recent table
+        self.assertIn("Finished only", body)
+        # _format_duration(300.0) → "5:00"
+        self.assertIn("5:00", body)
+
+    def test_idle_status_json(self) -> None:
+        """GET /status.json when current is None → parsed JSON reflects idle state."""
+        resp = urlopen(f"http://127.0.0.1:{self.port}/status.json")
+        data = json.loads(resp.read().decode())
+        self.assertIsNone(data["current"])
+        self.assertEqual(len(data["recent"]), 1)
+
+
+# ---------------------------------------------------------------------------
 # Duration formatting edge cases
 # ---------------------------------------------------------------------------
 
