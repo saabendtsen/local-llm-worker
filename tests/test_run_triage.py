@@ -498,6 +498,14 @@ class PromptTests(unittest.TestCase):
         self.assertEqual([f["index"] for f in numbered], [1, 2, 3, 4])
         self.assertEqual(numbered[0]["file"], "scripts/x.py:865")
 
+    def test_findings_only_withholds_the_diff(self):
+        prompt = build_prompt("INSTR", "SPEC", FINDINGS, "base", "br", "+added line",
+                              Path("C:/run/under-triage.patch"), findings_only=True)
+        self.assertNotIn("+added line", prompt)
+        self.assertNotIn("under-triage.patch", prompt)
+        self.assertIn("## No diff is provided", prompt)
+        self.assertIn('"index": 1', prompt)
+
     def test_diff_is_inlined_when_small(self):
         prompt = build_prompt("INSTR", "SPEC", FINDINGS, "base", "br", "+added line",
                               Path("C:/run/under-triage.patch"))

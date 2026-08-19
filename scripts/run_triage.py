@@ -84,7 +84,15 @@ def format_findings(findings: list[dict]) -> str:
 
 def build_prompt(instructions: str, spec_body: str, findings: list[dict], base: str,
                  branch: str, diff: str, diff_path: Path,
-                 max_inline: int = MAX_INLINE_PROMPT_CHARS) -> str:
+                 max_inline: int = MAX_INLINE_PROMPT_CHARS, findings_only: bool = False) -> str:
+    """Assemble the triage prompt.
+
+    With `findings_only` the diff is withheld entirely: the model gets the
+    specification, the findings and read access to the branch, and must open
+    the cited files itself. That is the cheaper configuration -- the diff is
+    most of the prompt -- and whether triage quality survives it is the
+    question the flag exists to answer.
+    """
     head = (
         f"{instructions}\n\n"
         f"---\n\n"
@@ -98,8 +106,14 @@ def build_prompt(instructions: str, spec_body: str, findings: list[dict], base: 
         f"## The findings ({len(findings)} total, 1-based `index`)\n\n"
         f"```json\n{format_findings(findings)}\n```\n\n"
         f"---\n\n"
-        f"## The diff of the branch against its base\n\n"
     )
+    if findings_only:
+        return head + (
+            "## No diff is provided\n\n"
+            "Verify each finding by reading the cited files in the repository. Every file and\n"
+            "line the findings name is there at the branch tip.\n"
+        )
+    head += "## The diff of the branch against its base\n\n"
     inline = f"```diff\n{diff}\n```\n"
     if len(head) + len(inline) <= max_inline:
         return head + inline
@@ -632,6 +646,8 @@ def main() -> int:
     parser.add_argument("--baseline", default=None,
                         help="the suite's current result on the reviewed branch, e.g. "
                              "'172 passed, ruff clean'; rendered into every task")
+    parser.add_argument("--findings-only", action="store_true",
+                        help="withhold the diff; the model verifies findings by reading the branch")
     parser.add_argument("--force", action="store_true",
                         help="overwrite existing task files with the same names")
     args = parser.parse_args()
@@ -686,7 +702,8 @@ def main() -> int:
     diff_path.write_text(diff, encoding="utf-8")
 
     instructions = TRIAGE_PROMPT.read_text(encoding="utf-8")
-    prompt = build_prompt(instructions, spec_body, findings, base, args.branch, diff, diff_path)
+    prompt = build_prompt(instructions, spec_body, findings, base, args.branch, diff, diff_path,
+                          findings_only=args.findings_only)
     (run_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
 
     git(repo, "worktree", "add", "--detach", str(worktree), args.branch)
@@ -708,6 +725,7 @@ def main() -> int:
         "spec": str(args.spec),
         "findings_file": str(args.findings),
         "findings_count": len(findings),
+        "findings_only": args.findings_only,
         "frontier": args.frontier,
         "model": args.model,
         "command": command_for_record(cmd),
