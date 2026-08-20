@@ -1,0 +1,372 @@
+I read the implementation and the cited tests. Verification notes are in each disposition.
+
+```json
+{
+  "dispositions": [
+    {
+      "findings": [3, 4],
+      "disposition": "fix",
+      "verified": "scripts/status_page.py:379-385 parses `started[\"started_at\"]` and `terminal_data[\"recorded_at\"]` with `datetime.fromisoformat` inside `except (KeyError, ValueError)`; scripts/status_page.py:405-410 does the same for the running branch with `now - started_dt`. `datetime.fromisoformat(99999)` raises TypeError, and a naive `started_at` string parsed at :406 subtracted from the aware `now` (:331-334) also raises TypeError. Neither is in the except tuple, so both escape `collect_status` and therefore both `_serve_html` (:567) and `_serve_json` (:561). Contrast scripts/status_page.py:44-47, where `_parse_now` already normalises a naive datetime to UTC.",
+      "rationale": "One uncaught-TypeError defect in two adjacent parse sites; a single hardening task resolves both, and it crashes a user-facing page.",
+      "task": {
+        "slug": "harden-timestamp-parsing",
+        "title": "stop TypeError from escaping collect_status on non-string or naive timestamps",
+        "category": "bugfix",
+        "complexity": "medium",
+        "files_allowed": ["scripts/status_page.py", "tests/test_status_page.py"],
+        "current_behavior": "`collect_status` parses timestamps at two places:\n\n- finished runs — `scripts/status_page.py:379-385`:\n  ```python\n  started_dt = datetime.fromisoformat(started[\"started_at\"])\n  recorded_dt = datetime.fromisoformat(terminal_data[\"recorded_at\"])\n  duration = (recorded_dt - started_dt).total_seconds()\n  except (KeyError, ValueError):\n  ```\n- running runs — `scripts/status_page.py:405-410`, same shape with `duration = (now - started_dt).total_seconds()`.\n\n`datetime.fromisoformat` raises **TypeError**, not ValueError, when handed a non-string (e.g. `\"recorded_at\": 99999`). Subtracting a naive datetime (from `\"2026-08-19T10:00:00\"`, no offset) from the timezone-aware `now` also raises **TypeError**. `except (KeyError, ValueError)` catches neither, so the exception leaves `collect_status`, tracebacks out of the `status` subcommand, and breaks `GET /` and `GET /status.json` (the client sees `RemoteDisconnected`).\n\nRepro: create a run directory with a valid `started.json` and a `run.json` of `{\"recorded_at\": 99999}`, then call `collect_status(runs_dir, now)`.",
+        "desired_behavior": "`collect_status` never raises for a badly typed or naive timestamp.\n\n- A `started_at` or `recorded_at` that is **not a string** makes that run join `unreadable` by directory name, exactly as an unparseable one already does — no exception, and the rest of the tree is still collected.\n- A **naive** ISO-8601 timestamp (no offset) is treated as UTC, the same rule `_parse_run`/`_parse_now` already applies at `scripts/status_page.py:44-47`. A run with a naive `started_at` therefore gets a normal, non-negative `duration_seconds`, not an error and not an `unreadable` entry.\n- Everything that already works keeps working: missing keys and malformed strings still land in `unreadable`, and every existing test passes unchanged.",
+        "out_of_scope": [
+          "Do not change the JSON shape: no new or renamed top-level keys, no new run-record keys, no change to the `recent` cap.",
+          "Do not change the HTML rendering.",
+          "Do not touch any file other than scripts/status_page.py and tests/test_status_page.py.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "finished run whose run.json is `{\"recorded_at\": 99999}` (started.json valid) — collect_status returns without raising and the directory name is in `unreadable`", "source_of_truth": "the same `unreadable` assertion shape the existing `test_unreadable_terminal_truncated` uses at tests/test_status_page.py:214 — reuse it"},
+          {"case": "running run whose started.json has `\"started_at\": 12345` (no terminal file) — no exception, directory name in `unreadable`, `running` is empty", "source_of_truth": "same as above: the existing `unreadable` list assertion"},
+          {"case": "running run with naive `\"started_at\": \"2026-08-19T10:00:00\"`, collect_status called with now = `2026-08-19T10:05:00+00:00`", "source_of_truth": "`duration_seconds == 300.0` — naive means UTC, the rule already pinned by `test_naive_now_treated_as_utc` at tests/test_status_page.py:282"},
+          {"case": "finished run with naive `\"started_at\": \"2026-08-19T10:00:00\"` and aware `\"recorded_at\": \"2026-08-19T10:01:00+00:00\"`", "source_of_truth": "`duration_seconds == 60.0`, and the run appears in `recent`, not in `unreadable`"},
+          {"case": "`GET /status.json` served over a port-0 server against a tree containing the `{\"recorded_at\": 99999}` run", "source_of_truth": "HTTP status 200 and a body that parses as JSON — copy the server fixture from the existing `HttpServerTests` (tests/test_status_page.py:423)"},
+          {"case": "regression: a run whose started.json has no `started_at` key at all", "source_of_truth": "still in `unreadable`, unchanged from today's behaviour"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "No test that passed before your change fails after it; record the pass count before and after and state both in your summary."
+        ],
+        "notes": [
+          "The smallest honest fix is a small private helper (e.g. `_parse_timestamp(value)`) that returns an aware datetime or raises ValueError for anything it cannot handle, used by both call sites; then the existing `except (KeyError, ValueError)` keeps working unchanged.",
+          "Follow the module's conventions: `from __future__ import annotations`, private helpers prefixed `_`, pathlib only, `unittest.TestCase` with `tempfile.TemporaryDirectory()` fixtures in `setUp`.",
+          "Ruff runs before pytest — an unused import fails the acceptance command."
+        ],
+        "mutation_check": null
+      }
+    },
+    {
+      "findings": [6],
+      "disposition": "fix",
+      "verified": "scripts/status_page.py:619 renders the group header from `group[\"running\"]`/`group[\"finished\"]`, which `_build_groups` (:485-486) computes over `all_runs` including in-flight runs. The row loop at :623 is `for run in result[\"recent\"]`, and `recent` only ever receives finished records (:401). The `state = \"running\"` branch at :634-635 is therefore unreachable: a header can say '1 running' while no running row exists.",
+      "rationale": "Real, user-visible: the running run the page exists to show never appears in any table.",
+      "task": {
+        "slug": "render-running-rows",
+        "title": "show running runs as rows in their pipeline's table",
+        "category": "bugfix",
+        "complexity": "small",
+        "files_allowed": ["scripts/status_page.py", "tests/test_status_page.py"],
+        "current_behavior": "In `_serve_html`, each group's header is built from the group counts (`scripts/status_page.py:619`), which include in-flight runs, but the row loop is `for run in result[\"recent\"]` (`scripts/status_page.py:623`) and `recent` holds finished runs only (they are the only records appended to it, `scripts/status_page.py:401`). So a page with one running and two finished `f03` runs prints the header `Pipeline: f03 (1 running, 2 finished)` above a table with two rows, both finished. The `state = \"running\"` branch at `scripts/status_page.py:632-635` can never fire.",
+        "desired_behavior": "Each group's table lists that group's **running** runs as well as its finished ones, newest first by `started_at`, with running rows above finished ones. A running row shows the same columns as a finished one: ID, kind, title, `state` = `running`, started, duration (from its live `duration_seconds`), and an empty detail cell (a running record has no `detail`). The header counts and the table rows agree on how many running runs there are.\n\nThe JSON is unchanged — this is a rendering fix only. Finished rows may stay limited to what `recent` holds; do not widen that.",
+        "out_of_scope": [
+          "Do not change `collect_status` or the JSON it returns in any way — no new keys, no change to the `recent` cap, no running records added to `recent`.",
+          "Do not change the group header text or the group ordering.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "tree with one running and two finished runs all in pipeline `f04`; GET / over a port-0 server", "source_of_truth": "the body contains a row for the running run's task_id and the literal `<td>running</td>` that `scripts/status_page.py:634-635` produces; all three task_ids appear in the body"},
+          {"case": "the same tree — header and rows agree", "source_of_truth": "the body contains `(1 running, 2 finished)` (the literal `scripts/status_page.py:619` renders) and exactly one `<td>running</td>` occurrence"},
+          {"case": "running run with no pipeline key alongside a finished `f04` run", "source_of_truth": "the running run's row appears under the `No pipeline` heading (the literal at `scripts/status_page.py:615`), not under `f04`"},
+          {"case": "regression: nothing running, one finished run", "source_of_truth": "the existing `test_idle_status_line_with_finished` at tests/test_status_page.py:1130 still passes unchanged, and no `<td>running</td>` appears"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "The `GET /status.json` body for the same tree is byte-identical in shape to before your change (same keys); only the HTML differs."
+        ],
+        "notes": [
+          "Add the new tests to `HtmlRenderingTests` (tests/test_status_page.py:1096) — its port-0 server fixture is the one to extend.",
+          "A running record has no `finished_at` key; the existing `if \"finished_at\" in run` check at scripts/status_page.py:632 already distinguishes them, and `run.get(\"detail\", {})` already yields an empty cell.",
+          "Clear `status_page._events_cache` in `setUp` if your fixture writes an `events.jsonl` — see tests/test_status_page.py:694-696 for the idiom."
+        ],
+        "mutation_check": null
+      }
+    },
+    {
+      "findings": [8],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:64-74: `total = int(seconds)`; `< 3600` gives `m:ss`, else `h:mm:ss`. 59.0 → '0:59', 3599.0 → '59:59', 3600.0 → '1:00:00', 3725.0 → '1:02:05' — the code is correct. tests/test_status_page.py:662-681 asserts only 330.0, 5.0, 3600.0, 3723.0 and 0.0; neither 59.0 nor 3599.0 is covered, so the hour boundary is unpinned on one side.",
+      "rationale": "Correct implementation, boundary untested.",
+      "task": {
+        "slug": "duration-boundary-tests",
+        "title": "pin the m:ss / h:mm:ss boundary of _format_duration",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "`DurationFormatTests` (tests/test_status_page.py:662-681) covers 330.0, 5.0, 3600.0, 3723.0 and 0.0. The values that sit on the hour boundary — 59.0 and 3599.0 — are not asserted, so moving the `< 3600` comparison at `scripts/status_page.py:65` by one second would not fail any test.",
+        "desired_behavior": "`DurationFormatTests` also asserts the four values the specification names, so any change to the boundary comparison fails a test.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all.",
+          "Do not change or delete the existing assertions in DurationFormatTests.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "_format_duration(59.0)", "source_of_truth": "`\"0:59\"` — the literal in the task specification and in the function's own docstring at scripts/status_page.py:61"},
+          {"case": "_format_duration(3599.0)", "source_of_truth": "`\"59:59\"` — same source"},
+          {"case": "_format_duration(3600.0)", "source_of_truth": "`\"1:00:00\"` — same source (already asserted at tests/test_status_page.py:676; keep it)"},
+          {"case": "_format_duration(3725.0)", "source_of_truth": "`\"1:02:05\"` — same source"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified (`git diff --stat` shows only tests/test_status_page.py)."
+        ],
+        "notes": [
+          "Follow the local style: `from status_page import _format_duration` inside the test method, as the neighbouring tests do."
+        ],
+        "mutation_check": "In `_format_duration` (scripts/status_page.py:65), change `if total < 3600:` to `if total < 3599:`. The 3599.0 assertion must fail with `'0:59:59' != '59:59'`. Restore the line afterwards and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [12],
+      "disposition": "fix-test-only",
+      "verified": "tests/test_status_page.py:891-905: the docstring says 'two ### FINDING and one #### FINDING → findings==2', but the fixture at :896-901 has three `### FINDING` lines (one, two, four) plus one `#### FINDING`, and the assertion at :905 is `findings == 3`. The counting code at scripts/status_page.py:246-251 is correct — it matches the `### FINDING` prefix only.",
+      "rationale": "The implementation is right; the test's fixture and docstring disagree with each other and with the specification's stated case.",
+      "task": {
+        "slug": "review-findings-fixture",
+        "title": "make test_review_findings match its docstring and the specified case",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "`test_review_findings` (tests/test_status_page.py:891) is documented as 'two ### FINDING and one #### FINDING → findings==2', but its `review.md` fixture (tests/test_status_page.py:896-901) contains three `### FINDING` lines and one `#### FINDING`, and it asserts `findings == 3`. The assertion matches the fixture; the docstring matches neither.",
+        "desired_behavior": "The fixture contains exactly two `### FINDING` lines and one `#### FINDING` line, the assertion is `findings == 2`, and the docstring says the same. The test then states the specification's case literally: `####` headings are not counted.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all — the counting logic is correct.",
+          "Do not change `test_review_findings_exact_prefix` (tests/test_status_page.py:907) or `test_review_no_review_md` (tests/test_status_page.py:921).",
+          "Do not address any other review finding."
+        ],
+        "cases": [{"case": "review.md containing two `### FINDING` lines and one `#### FINDING` line", "source_of_truth": "`detail[\"findings\"] == 2` — the specification's case table entry: 'Finished review with review.md containing two ### FINDING headings and one #### FINDING → findings == 2'"}],
+        "acceptance": [
+          "The case above passes and the test's docstring states the same numbers as its assertion.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the changed test.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "Keep the existing `_write_started` / `_write_terminal` helpers and the blank-line style of the current fixture; only the heading lines and the expected number change."
+        ],
+        "mutation_check": "In `_detail_review` (scripts/status_page.py:249), change `if stripped.startswith(\"### FINDING\"):` to `if stripped.startswith(\"###\"):` so `#### FINDING` is counted too. `test_review_findings` must fail with `3 != 2`. Restore the line afterwards and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [7],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:235-243: `_detail_review` sets `timed_out` from `worker.get(\"timed_out\") or worker.get(\"idle_timed_out\")` when `worker` is a dict, else from the top-level keys — correct per the spec. tests/test_status_page.py:891-928: every review test writes a terminal file with `recorded_at` only (via `_write_terminal`) and asserts on `findings` alone, so nothing pins `timed_out` or `turns` for reviews.",
+      "rationale": "Correct code, no assertion on the review `timed_out` / `turns` fields.",
+      "task": {
+        "slug": "review-detail-timeout-tests",
+        "title": "pin turns and timed_out in the review detail",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "`_detail_review` (scripts/status_page.py:223-253) produces `turns`, `timed_out` and `findings`, but every review test in `PerKindDetailTests` (tests/test_status_page.py:891-928) writes a `review.json` holding only `recorded_at` and asserts only on `findings`. Making `_detail_review` return `timed_out=True` unconditionally leaves the whole suite green.",
+        "desired_behavior": "`PerKindDetailTests` asserts the `turns` and `timed_out` fields of a review's detail for the worker-dict shape, both timeout flags, and the absent-worker shape.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all.",
+          "Do not change the existing review tests' assertions on `findings`.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "review.json = `{\"recorded_at\": \"2026-08-19T10:01:00+00:00\", \"events\": {\"turns\": 5}, \"worker\": {\"timed_out\": true, \"idle_timed_out\": false}}`", "source_of_truth": "`detail[\"turns\"] == 5` and `detail[\"timed_out\"] is True` — the spec's review row: `turns` from `events.turns`, `timed_out` true if `worker.timed_out` or `worker.idle_timed_out`"},
+          {"case": "review.json with `\"worker\": {\"timed_out\": false, \"idle_timed_out\": true}`", "source_of_truth": "`detail[\"timed_out\"] is True` — the same spec rule, the idle branch"},
+          {"case": "review.json with `\"worker\": {\"timed_out\": false, \"idle_timed_out\": false}`", "source_of_truth": "`detail[\"timed_out\"] is False`"},
+          {"case": "review.json with `recorded_at` only (no `events`, no `worker`)", "source_of_truth": "`detail[\"turns\"] is None` and `detail[\"timed_out\"] is False` — mirrors the finished-task minimal case already asserted at tests/test_status_page.py:876-889"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "Write the review.json with `json.dumps(...)` directly rather than `_write_terminal`, the way `test_task_full_detail` (tests/test_status_page.py:848) writes its run.json.",
+          "Assert with `assertIs(..., True)` / `assertIs(..., False)` so a truthy non-bool would not satisfy the test."
+        ],
+        "mutation_check": "In `_detail_review` (scripts/status_page.py:238), change `timed_out = bool(worker.get(\"timed_out\") or worker.get(\"idle_timed_out\"))` to `timed_out = False`. The first two cases above must fail (`False is not True`). Restore the line and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [1],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:416-432: the running record is built with `turns`, `tool_calls`, `last_activity_at` and `last_activity_seconds_ago` from `_count_events_incremental` and `_last_activity_at` — correct per the spec. tests/test_status_page.py:688-834 (`IncrementalReaderTests`) exercises those two helpers directly against a temporary file; no test reads the four keys back out of `collect_status`'s `running` / `current` records.",
+      "rationale": "The wiring between the helpers and the run record is unpinned.",
+      "task": {
+        "slug": "running-record-live-fields",
+        "title": "pin the live-progress fields on collect_status's running records",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "`collect_status` adds `turns`, `tool_calls`, `last_activity_at` and `last_activity_seconds_ago` to every running record (scripts/status_page.py:416-432), but the tests only exercise `_count_events_incremental` and `_last_activity_at` in isolation (tests/test_status_page.py:688-834). Deleting all four keys from the running record leaves the suite green.",
+        "desired_behavior": "`CollectStatusTests` asserts the four fields on `result[\"running\"][0]` and on `result[\"current\"]` for a running run with an `events.jsonl`, and asserts their absent-file values for a running run without one.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all.",
+          "Do not change any existing test.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "running run whose events.jsonl holds three `{\"type\":\"turn_end\"}` lines, two `{\"type\":\"tool_execution_end\"}` lines, one `{\"type\":\"text\"}` line and one line of `not json`", "source_of_truth": "`result[\"running\"][0][\"turns\"] == 3` and `[\"tool_calls\"] == 2` — the same fixture and numbers `test_basic_counts` asserts at tests/test_status_page.py:711-726; reuse those literals"},
+          {"case": "the same run — `current` is the same record", "source_of_truth": "`result[\"current\"][\"turns\"] == 3` and `result[\"current\"][\"tool_calls\"] == 2`"},
+          {"case": "the same run with the events.jsonl mtime set by `os.utime` to `now − 42 s`", "source_of_truth": "`result[\"running\"][0][\"last_activity_seconds_ago\"]` within 0.5 of `42.0`, and `last_activity_at` is a non-empty string — the tolerance the spec's case table states and that `test_last_activity_seconds_ago` (tests/test_status_page.py:818) already uses"},
+          {"case": "running run with no events.jsonl at all", "source_of_truth": "`turns == 0`, `tool_calls == 0`, `last_activity_at is None`, `last_activity_seconds_ago is None` — the spec's 'No events.jsonl' row"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "Clear `status_page._events_cache` in `setUp` and `tearDown` — the cache is module-level and keyed by path string; see tests/test_status_page.py:691-701 for the exact idiom.",
+          "Pass an explicit `now` to `collect_status` (the existing `CollectStatusTests` fixture at tests/test_status_page.py:64 already pins one) and derive the `os.utime` timestamp from it."
+        ],
+        "mutation_check": "In `collect_status` (scripts/status_page.py:428-431), delete the four keys `\"turns\"`, `\"tool_calls\"`, `\"last_activity_at\"` and `\"last_activity_seconds_ago\"` from the running record literal. The new tests must fail with `KeyError: 'turns'`. Restore the lines and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [2, 11],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:288-315: `_format_detail` renders `✓` for `verify_passed is True` and `✗` for `False` (:291-294), `\"<n> findings\"` for reviews (:301-305) and `\"<k> <v>\"` joined by `·` for triage dispositions (:307-315) — all correct. The only HTML test for this column is `test_verify_passed_false_show_x` (tests/test_status_page.py:1142-1155), which asserts `✗` for a failing task; nothing asserts `✓`, the review string, or the triage string.",
+      "rationale": "One gap — the detail column's rendering is unpinned — seen from the test-strength and coverage axes; a single task covering all three kinds resolves both findings.",
+      "task": {
+        "slug": "detail-column-rendering-tests",
+        "title": "pin the rendered detail column for task, review and triage rows",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "`_format_detail` (scripts/status_page.py:283-317) is the only producer of the table's detail cell. `HtmlRenderingTests` asserts only that a failing task's row contains `✗` (tests/test_status_page.py:1142-1155). Rendering `✗` for a *passing* task, or returning `\"\"` for every review and triage row, leaves the whole suite green.",
+        "desired_behavior": "`HtmlRenderingTests` asserts the rendered detail cell for one passing task, one review and one triage, so that any of those three branches breaking fails a test.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all — the rendering is correct as written.",
+          "Do not change `test_verify_passed_false_show_x`.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "finished task with `run.json` `{\"recorded_at\": ..., \"verify\": {\"passed\": true}, \"diff\": {\"files_changed\": 2, \"lines_added\": 10, \"lines_removed\": 3}}`; GET /", "source_of_truth": "the body contains `✓` and the literal `+10/−3` that `scripts/status_page.py:298` renders (note: U+2212 MINUS SIGN, copy the character from that line)"},
+          {"case": "the same page contains no `✗`", "source_of_truth": "`scripts/status_page.py:291-294` — `✗` is emitted only when `verify_passed is False`; this is what distinguishes a pass from a fail"},
+          {"case": "finished review with a review.md holding two `### FINDING` lines; GET /", "source_of_truth": "the body contains `2 findings` — the `f\"{findings} findings\"` literal at scripts/status_page.py:304"},
+          {"case": "finished triage with `triage.json` `{\"recorded_at\": ..., \"valid\": true, \"attempts\": [{}], \"tasks\": [{}], \"triage\": {\"dispositions\": [{\"disposition\": \"fix\"}, {\"disposition\": \"fix\"}, {\"disposition\": \"drop\"}]}}`; GET /", "source_of_truth": "the body contains `fix 2` and `drop 1` — the `f\"{k} {v}\"` labels joined by ` · ` at scripts/status_page.py:311-314"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "Add these to `HtmlRenderingTests` (tests/test_status_page.py:1096) and reuse its port-0 server fixture; `test_verify_passed_false_show_x` shows how to write a run.json into the fixture tree.",
+          "The response body is decoded UTF-8, so `✓`, `✗` and `−` compare directly — no HTML entity is involved (the cell goes through `html.escape`, which leaves these characters alone).",
+          "Write the test file with an explicit `encoding=\"utf-8\"`-safe editor; the file already contains these characters at tests/test_status_page.py:1155."
+        ],
+        "mutation_check": "Apply all three edits to `_format_detail` at once: at scripts/status_page.py:292 change `parts.append(\"✓\")` to `parts.append(\"✗\")`; make the `if kind == \"review\":` branch (scripts/status_page.py:301) `return \"\"`; make the `if kind == \"triage\":` branch (scripts/status_page.py:307) `return \"\"`. All four new assertions must fail. Restore the three edits and quote one of the failures in your summary."
+      }
+    },
+    {
+      "findings": [9],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:582-608 builds the current-run panel from `current`'s `title`, `kind`, `task_id`, `pipeline`, `duration_seconds`, `turns`, `tool_calls` and `last_activity_seconds_ago` — correct. tests/test_status_page.py:469 (`test_html_200_contains_current_title`) asserts only the `Current run` heading; tests/test_status_page.py:1122 asserts the status line, which is built separately at scripts/status_page.py:572. No test reads a value out of the panel.",
+      "rationale": "The panel could render entirely blank and stay green.",
+      "task": {
+        "slug": "current-panel-value-tests",
+        "title": "pin the values rendered in the current-run panel",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "The current-run panel (scripts/status_page.py:595-608) renders Title, Kind, ID, Pipeline, Elapsed, Turns, Tool calls and 'last activity Ns ago'. The only test touching it checks that the string `Current run` is present (tests/test_status_page.py:469). Replacing every panel value with an empty string or zero leaves the suite green.",
+        "desired_behavior": "One test in `HtmlRenderingTests` builds a running run with a known kind, id, pipeline and events file, fetches `GET /`, and asserts the panel shows each of those values.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all — do not 'improve' the panel markup to make assertions easier.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "running run with task_id `live-1`, kind `task`, pipeline `f04`; GET /", "source_of_truth": "the body contains the literals `<strong>Kind:</strong> task`, `<strong>ID:</strong> live-1` and `<strong>Pipeline:</strong> f04` — exactly as the template at scripts/status_page.py:599-601 renders them"},
+          {"case": "the same run with an events.jsonl of three `{\"type\":\"turn_end\"}` and two `{\"type\":\"tool_execution_end\"}` lines", "source_of_truth": "the body contains `<strong>Turns:</strong> 3` and `<strong>Tool calls:</strong> 2` — the template at scripts/status_page.py:605-606, with the counts from the same fixture `test_basic_counts` uses (tests/test_status_page.py:711-726)"},
+          {"case": "the same run, `started_at` five minutes before the server's clock", "source_of_truth": "the body contains `<strong>Elapsed:</strong> 5:` — `_format_duration` renders `m:ss` under an hour (scripts/status_page.py:66-68); assert on the minute part only, since the server uses the real clock and the seconds drift"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "`_serve_html` uses the real `datetime.now(timezone.utc)` (scripts/status_page.py:567), so compute `started_at` as `datetime.now(timezone.utc) - timedelta(minutes=5)` in the fixture rather than hard-coding a date; that keeps the elapsed assertion stable.",
+          "Clear `status_page._events_cache` in `setUp` and `tearDown` — see tests/test_status_page.py:691-701.",
+          "Add the test to `HtmlRenderingTests` (tests/test_status_page.py:1096)."
+        ],
+        "mutation_check": "In `_serve_html` (scripts/status_page.py:583-589), replace the assignments with constants: `c_kind = \"\"`, `c_id = \"\"`, `c_pipeline = \"\"`, `c_turns = 0`, `c_tool_calls = 0`. The new test must fail on the missing `<strong>ID:</strong> live-1`. Restore the lines and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [5],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:571-579: `if current:` renders `RUNNING: <title>`, `elif result[\"recent\"]:` renders the idle line — the precedence is correct. tests/test_status_page.py:1122-1128 has a running run and no finished run; tests/test_status_page.py:1130-1140 has a finished run and nothing running. No fixture holds both, so swapping the two conditions changes no test outcome.",
+      "rationale": "Correct precedence, but no fixture exercises it.",
+      "task": {
+        "slug": "status-line-precedence-test",
+        "title": "pin that a running run wins over finished runs in the status line",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "The status line chain at scripts/status_page.py:571-579 prefers the running run over the newest finished one. Both HTML status-line tests use single-state fixtures (tests/test_status_page.py:1122 has only a running run, tests/test_status_page.py:1130 only a finished one), so a page holding both is never rendered by any test.",
+        "desired_behavior": "One test builds a tree with **both** a running run and an older finished run, fetches `GET /`, and asserts the page announces the running run rather than idling.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all — in particular, do not change the lower-case `idle` wording; assert what the code renders today.",
+          "Do not assert on the position of the status line within `<body>` — a separate task covers that.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "tree with a finished run (`started_at` 09:00, `recorded_at` 09:05) and a running run titled `Build thing` started 10:00; GET /", "source_of_truth": "the body contains `RUNNING: Build thing` — the literal built at scripts/status_page.py:572, the same prefix `test_running_status_line` asserts at tests/test_status_page.py:1128"},
+          {"case": "the same page does not idle", "source_of_truth": "the body does not contain `idle — last run finished` — the literal built at scripts/status_page.py:577"},
+          {"case": "the `<title>` of the same page", "source_of_truth": "contains `RUNNING:` — `<title>{status_text}</title>` at scripts/status_page.py:694 uses the same string"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "Add the test to `HtmlRenderingTests` (tests/test_status_page.py:1096); `test_idle_status_line_with_finished` shows how to write a finished run into the fixture tree.",
+          "By the time this task runs, an earlier task may have added running rows to the group tables — assert on the status-line literals above, not on row counts."
+        ],
+        "mutation_check": "In `_serve_html` (scripts/status_page.py:571-573), swap the two conditions so it reads `if result[\"recent\"]:` first and `elif current:` second. The new test must fail on the missing `RUNNING: Build thing`. Restore the order and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [13],
+      "disposition": "fix-test-only",
+      "verified": "scripts/status_page.py:710-712: the body template is `<body>\\n{status_text}\\n{current_panel}` — the status line genuinely is the first element of `<body>`, as the spec requires. tests/test_status_page.py:1164-1179 only checks that the `<title>` text appears somewhere in the body, which stays true if the panel is emitted first.",
+      "rationale": "Correct ordering, unpinned; the reviewer's own swap mutation left the suite green.",
+      "task": {
+        "slug": "status-line-position-test",
+        "title": "pin the status line as the first element of <body>",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_status_page.py"],
+        "current_behavior": "The page template puts `{status_text}` immediately after `<body>` and `{current_panel}` after it (scripts/status_page.py:710-712). `test_html_title_matches_status_line` (tests/test_status_page.py:1164) extracts the `<title>` text and asserts it appears somewhere in the body — an assertion that also holds if the panel were rendered first.",
+        "desired_behavior": "A test asserts the status text is the first thing inside `<body>`: the content between `<body>` and the current-run panel, stripped of whitespace, starts with the status text.",
+        "out_of_scope": [
+          "Do not modify scripts/status_page.py at all.",
+          "Do not change `test_html_title_matches_status_line`.",
+          "Do not address any other review finding."
+        ],
+        "cases": [
+          {"case": "GET / with one running run titled `Build thing`", "source_of_truth": "the substring of the body after the first `<body>` tag, left-stripped, starts with `RUNNING: Build thing` — the same status literal `_serve_html` puts in `<title>` (scripts/status_page.py:572, 694); read the expected text out of the `<title>` element of the same response so the two are pinned together"},
+          {"case": "the same page — ordering relative to the panel", "source_of_truth": "`body.index(\"RUNNING: Build thing\", body.index(\"<body>\")) < body.index(\"<h2>Current run</h2>\")` — the panel heading literal at scripts/status_page.py:596"},
+          {"case": "GET / with nothing running and one finished run", "source_of_truth": "the same ordering holds for the idle status text; take the expected text from the `<title>` of that response rather than hard-coding the wording"}
+        ],
+        "acceptance": [
+          "Every case above passes.",
+          "`python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.",
+          "scripts/status_page.py is unmodified."
+        ],
+        "notes": [
+          "The status text also appears inside `<title>`, so every index lookup must start after `body.index(\"<body>\")` — otherwise the test passes for the wrong reason.",
+          "Add the test to `HtmlRenderingTests` (tests/test_status_page.py:1096); the `re.search(r\"<title>(.*?)</title>\", body)` idiom is already used at tests/test_status_page.py:1175."
+        ],
+        "mutation_check": "In the page template (scripts/status_page.py:711-712), swap the `{status_text}` and `{current_panel}` lines so the panel comes first. The new test must fail because the body no longer starts with the status text. Restore the order and quote the failure in your summary."
+      }
+    },
+    {
+      "findings": [10],
+      "disposition": "drop",
+      "verified": "scripts/status_page.py:58-74: `_format_duration` is a private helper called from exactly two places, scripts/status_page.py:587 and :629, both with `duration_seconds` values produced by `(a - b).total_seconds()` on datetimes (scripts/status_page.py:382, :407). `datetime` arithmetic cannot yield NaN or infinity, so no input reaching this function on this branch can trigger `int()`'s ValueError/OverflowError.",
+      "rationale": "The value cannot arise on this branch — the only caller that could produce it is a hypothetical external one of a `_`-prefixed helper. Not a defect and not worth a guard."
+    }
+  ],
+  "order": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "summary": "Two real defects go to fix — uncaught TypeError on non-string or naive timestamps in both parse sites of collect_status, and group tables that never render the running runs their headers count — followed by eight test-only tasks against correct code (duration boundaries, the review-findings fixture that contradicts its own docstring, review timed_out, the live-progress fields on running records, the rendered detail column for all three kinds, the current-run panel values, status-line precedence and status-line position); the NaN/infinity finding is dropped as unreachable from any caller on this branch."
+}
+```

@@ -1,0 +1,610 @@
+# Triage Task — turn review findings into bounded fix tasks
+
+You are the **triage step** of a review pipeline. Several focused reviewers have each examined one
+branch through one lens (error paths, consistency, test strength, missing coverage) and a script
+has deduplicated and ordered their findings. You receive that list, the task specification the
+branch was meant to satisfy, and the branch's diff. The repository is checked out **read-only** at
+the branch tip, so every cited file and line is there to read.
+
+**Your only job: decide which findings become fix tasks, write those tasks, and order them.**
+
+You do not fix anything. You do not re-review the diff for new defects. You do not rewrite findings
+you disagree with into something else — you drop them and say why.
+
+## Why this needs saying
+
+The tasks you write will be executed by a **small local model**. It does exactly what the task
+says, and nothing the task does not say. It will not notice that a task is wrong, it will not check
+whether the code already does what the task asks, and it will not stop itself from "fixing" working
+code if the task tells it to. Whatever ambiguity you leave, it resolves at random.
+
+So the quality of the whole pipeline is decided here, in three ways:
+
+1. **A finding's `problem` field is a claim, not a fact.** Reviewers mutation-test: they break the
+   code, watch the suite pass, and restore. Sometimes the finding describes the *mutated* state as
+   though it were the current one — the `mutation:` line says "changed A to B", the `problem:` line
+   says "the code uses B". Converted mechanically, that task would tell the worker to change working
+   code *into* the broken form. This has already happened once in this project. **Read the cited
+   lines before you write anything.**
+
+2. **A defect and a test gap produce completely different tasks.** A defect means *fix the
+   behaviour, and add the test that pins it*. A test gap against correct code means *add the test;
+   do not touch the implementation*. Telling the worker to "fix" correct code is how it gets broken.
+   Classify explicitly, every time, from what the source actually says.
+
+3. **The worker cannot infer scope.** A task has to name the files it may edit, state the suite
+   baseline so the worker can tell a regression from noise, enumerate the cases a test must cover
+   with a source of truth for each assertion, and — for a test-only task — name the mutation that
+   proves the test discriminates. Leave any of those out and the worker fills the gap with a guess.
+
+## The procedure
+
+Follow it in this order.
+
+**Step 1 — Read the specification and the diff.** Know what the branch was supposed to do and what
+it did. Run `git diff <base>...HEAD` or read the patch file if it is not inlined below.
+
+**Step 2 — Verify every finding against the source.** For each finding, open the cited file at the
+cited line (or find the symbol if the line has moved) and record what the code *currently* does.
+Then decide, from the source and not from the finding's prose:
+
+- **defect** — the current code is wrong in the way described (or a closely related way);
+- **test gap** — the current code is correct, but nothing in the test suite would fail if it were
+  broken the way the reviewer broke it;
+- **wrong** — the finding misreads the code, the format, or the specification.
+
+Write down what you read, with `file:line`. That text goes in the `verified` field and is the
+evidence that you looked.
+
+**Step 3 — Merge findings that are the same issue.** Reviewers on different axes often see one
+defect through different lenses and cite different files — a missing-coverage finding on the
+implementation and a test-strength finding on the test file can be the same gap. The aggregator
+cannot merge those because it keys on file and line; you can. Merge only when one task would
+honestly resolve all of them. Two findings that happen to touch the same function are not one
+issue. **Prefer one finding per task.**
+
+**Step 4 — Dispose of each finding** (every input finding must appear in exactly one disposition):
+
+- `fix` — a real defect. The task changes behaviour and adds the test that pins it.
+- `fix-test-only` — a real test gap against correct code. The task adds a test and **forbids
+  touching the implementation**.
+- `drop` — the finding is wrong, or already covered by an existing test (the reviewer's own
+  mutation result sometimes shows this: "other tests failed as expected"). Say why in one or two
+  sentences.
+- `defer` — real, but the fix is disproportionate to the value right now (needs mocking machinery
+  the suite does not have, cosmetic, depends on a design decision the spec left open). Say why.
+  **A `defer` on a symptom must name its cause, or say the cause is unknown.** "Negative durations
+  are a design question" is true only once you know they come from a design choice. On f03 two
+  reviewers reported negative durations, every triage deferred them as design, and the cause was
+  a request handler that had captured the clock once at server start — a plain bug, fixable in
+  two lines, that stayed in the code through six fix cycles. Before deferring, ask *how could this
+  value arise on the current branch?* and read until you know. If the answer is a defect, it is a
+  `fix`, however cosmetic the symptom looked.
+
+**Step 5 — Write each task.** Bounded, concrete, and in the voice of a brief to a junior who will
+not ask questions:
+
+- `files_allowed` — the exact paths the worker may edit. Usually the implementation file and its
+  test file for `fix`; the test file alone for `fix-test-only`.
+- `current_behavior` — what the code does now, quoting the offending line with its path and line
+  number when it is short. Include the finding's repro command if it has one.
+- `desired_behavior` — the outcome, not the edit sequence. Edge cases named.
+- `out_of_scope` — what must not change. Always include "do not address any other review finding".
+  For `fix-test-only`, always include that the implementation file must not be modified.
+- `cases` — the table the worker's tests must cover. For every case, a **source of truth**: a
+  literal, an existing test's assertion to reuse, a value the codebase publishes. Never a
+  self-consistency check.
+- `acceptance` — verifiable statements. Include that the verify command passes and that the
+  whole suite stays green, not only the new tests.
+- `mutation_check` — for `fix-test-only` only: the exact edit that must make the new test fail
+  ("insert X at Y"). The worker is required to make it, watch the test fail, restore, and quote
+  the failure in its summary. Name a mutation that proves the test discriminates, not one that
+  breaks everything.
+- `notes` — the conventions to follow, the existing test to copy the fixture style from, a known
+  gotcha. Things that would otherwise cost a detour.
+
+Keep `rationale` terse — one or two sentences. The `verified` field is where the evidence goes.
+
+**Step 6 — Order the tasks.** Real defects in user-facing paths first (a crash a user can hit
+beats a missing test), then remaining defects, then test gaps. Within a tier, smallest first. The
+tasks run sequentially and each is based on the previous one's branch, so an earlier task's test
+file changes are visible to later ones.
+
+## What to watch for especially
+
+- **Inverted problem statements** — compare `problem:` against `mutation:` and against the source.
+- **"Crash" findings that cite an exception** — check the exception is really uncaught on the
+  current branch, not already handled one line above the cited one.
+- **Severity inflation** — a `low`/`suspected` finding may still be right, and a `high`/`verified`
+  one may still be inverted. Read the code either way.
+- **Findings about a format or a library** — JSON has no decimal width; argparse `action="append"`
+  is repeatable. Check the claim against what the format or library actually does.
+- **Test-strength findings whose own `result:` shows other tests caught the mutation** — that is
+  usually a drop: the behaviour is pinned, just not by the test the reviewer was looking at.
+- **Symptoms reported as findings** — a negative number, an impossible timestamp, a count that
+  never changes. The reviewer saw the effect; find the cause before you decide the disposition.
+
+## Output contract
+
+Your reply must contain **exactly one** fenced code block tagged `json`, and it must parse as a
+single JSON object of this shape. Text outside the block is ignored; keep it to a sentence or two.
+
+```json
+{
+  "dispositions": [
+    {
+      "findings": [3],
+      "disposition": "fix",
+      "verified": "scripts/x.py:865 calls metadata.get() straight after json.loads(); the except at :868 catches only JSONDecodeError and OSError, so a JSON list reaches .get() and raises AttributeError.",
+      "rationale": "Real crash on a user-facing command.",
+      "task": {
+        "slug": "nondict-runjson",
+        "title": "handle a run.json that is valid JSON but not an object",
+        "category": "bugfix",
+        "complexity": "small",
+        "files_allowed": ["scripts/x.py", "tests/test_x.py"],
+        "current_behavior": "markdown — what happens now, with path:line and the repro command",
+        "desired_behavior": "markdown — the outcome",
+        "out_of_scope": ["Do not change ...", "Do not address any other review finding."],
+        "cases": [
+          {"case": "run.json containing [1, 2, 3]", "source_of_truth": "the same sentinel state the existing truncated-JSON test asserts — reuse that literal"}
+        ],
+        "acceptance": ["Every case above passes.", "The verify command passes — the whole suite, not only the new tests."],
+        "notes": ["Follow the module's conventions: ..."],
+        "mutation_check": null
+      }
+    },
+    {
+      "findings": [4, 7],
+      "disposition": "fix-test-only",
+      "verified": "scripts/x.py:902-904 applies the state filter before the limit slice, as the spec requires.",
+      "rationale": "Correct but unpinned; findings 4 and 7 are one gap seen from two axes.",
+      "task": {
+        "slug": "limit-state-ordering-test",
+        "title": "pin the --state-before---limit ordering with a test",
+        "category": "tests",
+        "complexity": "small",
+        "files_allowed": ["tests/test_x.py"],
+        "current_behavior": "...",
+        "desired_behavior": "...",
+        "out_of_scope": ["Do not modify scripts/x.py at all.", "Do not address any other review finding."],
+        "cases": [{"case": "...", "source_of_truth": "..."}],
+        "acceptance": ["..."],
+        "notes": ["..."],
+        "mutation_check": "swap the order of the `if states:` block and the `if limit is not None:` slice in list_runs"
+      }
+    },
+    {
+      "findings": [11],
+      "disposition": "drop",
+      "verified": "scripts/x.py:472 rounds to 3 places; JSON numbers carry no decimal width, so 3605.0 and 3605.000 are the same value.",
+      "rationale": "Misunderstands the format."
+    }
+  ],
+  "order": [0, 1],
+  "summary": "One sentence on what was found and what was dropped."
+}
+```
+
+Rules the validator enforces — an output that breaks any of them is rejected and sent back to you:
+
+- `dispositions` is a non-empty list. Each item has `findings` (non-empty list of the 1-based
+  finding indexes from the input), `disposition` (one of `fix`, `fix-test-only`, `defer`, `drop`),
+  `verified` (non-empty string naming what you read, with `file:line`), and `rationale`
+  (non-empty string).
+- **Every input finding index appears in exactly one disposition.** None missing, none twice, none
+  invented.
+- `task` is present **if and only if** the disposition is `fix` or `fix-test-only`. A `drop` or
+  `defer` must not carry a `task`.
+- Inside `task`: `slug` is kebab-case (`[a-z0-9]+(-[a-z0-9]+)*`); `title` non-empty; `category`
+  is `bugfix` or `tests`; `complexity` is `small` or `medium`; `files_allowed` is a non-empty list
+  of repository-relative paths; `current_behavior` and `desired_behavior` are non-empty strings;
+  `out_of_scope`, `acceptance`, `notes` are lists of strings (`out_of_scope` and `acceptance`
+  non-empty); `cases` is a non-empty list of `{"case", "source_of_truth"}` objects with non-empty
+  strings.
+- `mutation_check` is a non-empty string when the disposition is `fix-test-only`, and `null` (or
+  absent) otherwise.
+- `order` lists the indexes (0-based, into `dispositions`) of every `fix`/`fix-test-only`
+  disposition, each exactly once, nothing else — this is the execution order.
+- `summary` is a non-empty string.
+
+Emit real JSON: double-quoted keys, no trailing commas, no comments. Put markdown inside string
+values if you want formatting in the rendered task.
+
+
+---
+
+## The branch under triage
+
+Branch `worker/f04-status-page-detail`, based on `main`. The repository is checked out read-only at the
+branch tip, so every cited file and line is readable. Do not modify anything.
+
+---
+
+## The task specification the branch was meant to satisfy
+
+# Task: give the status page real detail — live progress, per-kind facts, pipeline grouping
+
+**Edit `scripts/status_page.py`.** Then **edit `tests/test_status_page.py`**. Change no other file.
+
+## Current behavior
+
+`scripts/status_page.py` (f03) lists runs from `evaluation/runs/<id>/`: a run with `started.json`
+and no terminal file is running; one with `run.json` / `review.json` / `triage.json` is finished.
+The JSON has `current`, `running`, `recent` (capped at 10), `unreadable`, `ignored`; each run
+record carries `kind`, `task_id`, `title`, `started_at`, `duration_seconds` and, when finished,
+`finished_at`. The HTML shows a one-line "Current" and a four-column table. It is correct and bare.
+
+What it cannot say: how far along the current run is, whether a finished task passed its
+acceptance command, how big its diff was, how many findings a review produced, what a triage
+decided, or which runs belong together. Tonight's `evaluation/runs/` holds an implement, four
+reviews, a triage and eight fixes for `f03` side by side with the same shape for `f02`, and the
+page shows them as one flat list.
+
+Since today every `started.json` also carries `"pipeline"` — the first dash-separated token of
+the spec id, so `f03-status-page`, `f03-fix-02-…`, the `rv3-*` reviews of it and `tr-f03-*` all
+say `"pipeline": "f03"`. Older directories lack the key.
+
+## Desired behavior
+
+The same two commands, the same files, stdlib only, no JavaScript, inline CSS only. Everything
+already in the JSON stays exactly as it is (existing tests must keep passing unchanged); the
+following is **added**.
+
+### 1. Live progress for running runs
+
+Each entry in `running` (and therefore `current`) gains:
+
+- `turns` — the number of lines in the run's `events.jsonl` whose JSON object has
+  `"type": "turn_end"`; `tool_calls` — likewise for `"type": "tool_execution_end"`. Both `0` when
+  the file does not exist yet.
+- `last_activity_at` — the file's mtime as an ISO-8601 UTC timestamp, `null` when absent;
+  `last_activity_seconds_ago` — `now − mtime`, rounded to one decimal, `null` when absent.
+
+**Reading must be incremental.** `events.jsonl` for one run grows to hundreds of megabytes — both
+harnesses re-emit the whole message on every token — and the page refreshes every ten seconds.
+Keep a module-level cache keyed by path holding `(bytes_consumed, turns, tool_calls)`; on each
+call read only from `bytes_consumed` to the current end, update the counts, store the new offset.
+If the file is smaller than `bytes_consumed` (truncated, replaced), start over from zero. Count a
+line only when it parses as a JSON object with the `type` key; skip malformed lines silently; a
+partial last line (no trailing newline) must not be consumed until it is complete — leave the
+offset before it.
+
+### 2. Per-kind detail for finished runs
+
+Each entry in `recent` gains `"detail"`, a dict whose content depends on `kind`:
+
+| kind | source | keys |
+| --- | --- | --- |
+| `task` | `run.json` | `verify_passed` (bool, from `verify.passed`), `meaningful_pass` (bool), `files_changed`, `lines_added`, `lines_removed` (from `diff`), `turns` (from `events.turns`), `timed_out` (true if `worker.timed_out` or `worker.idle_timed_out`) |
+| `review` | `review.json` + `review.md` | `turns` (from `events.turns`), `timed_out` (as above), `findings` — the number of lines in `review.md` that start with `### FINDING`, `0` if the file is missing |
+| `triage` | `triage.json` | `valid` (bool), `attempts` (length of `attempts`), `tasks` (length of `tasks` or `0`), and `dispositions` — a dict counting `triage.dispositions[*].disposition` values, e.g. `{"fix": 3, "fix-test-only": 3, "defer": 2, "drop": 2}`; `{}` when `triage` is absent or `valid` is false |
+
+Missing keys → `null` for that field, never an exception. `detail` is `{}` for an unknown kind.
+
+### 3. Pipeline grouping
+
+Each run record (running or finished) gains `"pipeline"` — the `started.json` value, or `null`.
+The top level gains `"groups"`: a list, newest first by the newest `started_at` in the group, of
+
+```json
+{"pipeline": "f03" | null, "running": <n>, "finished": <n>, "runs": ["<task_id>", ...]}
+```
+
+with `runs` listing **every** run of that pipeline (not only the ten in `recent`), newest first.
+Runs without a pipeline go in one group with `"pipeline": null`, last.
+
+### 4. The page
+
+`GET /` renders, top to bottom:
+
+- a **status line** as the first element of `<body>`, and also as the `<title>`: `RUNNING: <title>`
+  when something is in flight, else `IDLE — last run finished <finished_at of the newest finished run>`
+  or `IDLE` when nothing has ever run;
+- the **current run** panel: title, kind, id, pipeline, elapsed, turns, tool calls, and
+  "last activity Ns ago";
+- one **section per group**, headed by the pipeline name and its running/finished counts, with a
+  table: ID, kind, title, state, started (local time is fine, say so in the summary), duration,
+  and a detail column rendered from `detail` — for tasks `✓`/`✗` plus `+added/−removed`, for
+  reviews `<n> findings`, for triages `fix <n> · test <n> · defer <n> · drop <n>`;
+- durations as `m:ss` under an hour and `h:mm:ss` from an hour up (`3600.0` → `1:00:00`,
+  `59.0` → `0:59`);
+- a `<style>` block with a `@media (max-width: 600px)` rule that lets tables scroll horizontally
+  (`overflow-x: auto` on a wrapper) and drops the margin — the page is read from a phone.
+
+Every value reaching the page still passes through `html.escape`.
+
+## Key interfaces
+
+- `scripts/run_task.py` — `write_started()` for the marker's keys; `EVENT_TURN = "turn_end"` and
+  `EVENT_TOOL = "tool_execution_end"` are the event names, and `summarise_events()` shows how the
+  runner itself counts them.
+- `evaluation/runs/f03-fix-08-frozen-clock/run.json`, `rv3-error-paths/review.json` +
+  `review.md`, `tr-f03-claude/triage.json` — real finished examples of each kind, with the keys
+  above. Read them; do not modify or add to any real run directory.
+- `evaluation/runs/*/events-distilled.jsonl` — the committed, smaller form of an event stream;
+  its lines have the same `type` values as the raw file and will do for eyeballing.
+
+## Seams under test
+
+- **The pure function** `collect_status(runs_dir, now)` over hand-built fixtures. **[REQUIRED]**
+- **The incremental reader** as its own function over a temporary file. **[REQUIRED]**
+- **`GET /` and `GET /status.json`** on a port-0 server, as the existing `HttpServerTests` do.
+  **[REQUIRED]**
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| Running run with `events.jsonl` of three `{"type":"turn_end"}` lines, two `{"type":"tool_execution_end"}` lines, one `{"type":"text"}` line and one line of `not json` | `turns == 3`, `tool_calls == 2`, no exception |
+| Incremental: read the file above once, append one more `turn_end` line, read again | `turns == 4` |
+| **Incremental, proven**: read once; then overwrite the **first** line in place with a `{"type":"turn_end"}` line padded with spaces to exactly the same byte length; read again | counts **unchanged** — a reader that re-reads from byte 0 counts one extra turn; one that reads only the appended bytes does not |
+| Partial last line: file ends with `{"type":"turn_en` (no newline); read; then complete the line and append `\n`; read again | first read does not count it, second does — `turns` goes from the prior value to prior + 1 |
+| File shrinks below the stored offset | counts restart from zero and equal the counts of the new content |
+| No `events.jsonl` | `turns == 0`, `tool_calls == 0`, `last_activity_at is None`, `last_activity_seconds_ago is None` |
+| `last_activity_seconds_ago` | set the file's mtime with `os.utime` to `now − 42 s`; assert `42.0` (±0.5) |
+| Finished task with `run.json` `{"recorded_at": ..., "verify": {"passed": true}, "meaningful_pass": true, "diff": {"files_changed": 2, "lines_added": 10, "lines_removed": 3}, "events": {"turns": 7}, "worker": {"timed_out": false, "idle_timed_out": false}}` | `detail == {"verify_passed": True, "meaningful_pass": True, "files_changed": 2, "lines_added": 10, "lines_removed": 3, "turns": 7, "timed_out": False}` — the literal dict |
+| Finished task whose `run.json` has `recorded_at` only | every detail field is `None`, `timed_out` is `False`, no exception |
+| Finished review with `review.md` containing two `### FINDING` headings and one `#### FINDING` | `findings == 2` |
+| Finished review with no `review.md` | `findings == 0` |
+| Finished triage with `triage.json` `{"recorded_at": ..., "valid": true, "attempts": [{}, {}], "tasks": [{}, {}, {}], "triage": {"dispositions": [{"disposition": "fix"}, {"disposition": "fix"}, {"disposition": "drop"}]}}` | `detail == {"valid": True, "attempts": 2, "tasks": 3, "dispositions": {"fix": 2, "drop": 1}}` |
+| Finished triage with `valid: false` and no `triage` key | `dispositions == {}`, `tasks == 0` |
+| Three runs with pipeline `f03` (one running, two finished) and one run with no `pipeline` key | `groups` has two entries; the first is `{"pipeline": "f03", "running": 1, "finished": 2, "runs": [...3 ids newest first...]}`; the last has `"pipeline": None` |
+| Twelve finished `f03` runs | `recent` has 10, the `f03` group's `runs` has **12** |
+| `_format_duration` (or its successor) | `59.0 → "0:59"`, `3599.0 → "59:59"`, `3600.0 → "1:00:00"`, `3725.0 → "1:02:05"` |
+| `GET /` with a running run titled `Build <thing>` | body starts (after `<!DOCTYPE html>` and `<html>`/`<head>`) with a `<title>` containing `RUNNING: Build &lt;thing&gt;`, and `<body>`'s first element contains the same text |
+| `GET /` with nothing running and one finished run | `<title>` and status line contain `IDLE` and the finished run's `finished_at` |
+| `GET /` with a finished task whose `verify_passed` is false | the body contains `✗` (or `&#10007;`) in that row — pin the literal you render |
+| `GET /` | body contains `@media (max-width: 600px)` and `overflow-x` |
+| `GET /status.json` after the page has been served once | the JSON's `groups` and `detail` match `collect_status` for the same tree (remove `generated_at` and any `*_seconds_ago` fields before comparing) |
+| Read-only | snapshot the set of paths under the fixture before and after `collect_status` plus one `GET /` plus one `GET /status.json`; equal |
+
+## Out of scope
+
+- Do not modify `scripts/run_task.py`, `run_review.py`, `run_triage.py` or any existing file other
+  than the two named.
+- Do not add files under `evaluation/runs/`.
+- No third-party packages, no JavaScript, no external assets.
+- Do not remove or rename any key the f03 JSON already has; do not change `recent`'s cap.
+
+## Acceptance criteria
+
+- [ ] `python scripts/status_page.py status` against the real `evaluation/runs/` exits 0, prints
+      valid JSON, and its `groups` contains an entry with `"pipeline": "f03"` whose `runs` include
+      `f03-fix-08-frozen-clock`.
+- [ ] Every case in the table behaves as its source of truth requires.
+- [ ] The proven-incremental case **fails** if the reader is changed to always start from byte 0.
+      Verify this yourself: make that change, watch the test fail, restore, and quote the failure in
+      your summary.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline on `main` is
+      **122 passed, 6 subtests passed**, ruff clean, so any other failure is a regression introduced
+      here.
+- [ ] Return a concise summary of what you built, the design choices you made and why, and
+      anything left unresolved.
+
+## Deliberately left to you
+
+- the exact HTML structure and CSS — it must read well on a phone and a desktop, and that is the
+  only requirement;
+- whether "started" shows UTC or local time — say which;
+- how the current-run panel looks when nothing is running;
+- whether `events.jsonl` is opened in binary and split on `\n` or read as text — the offset
+  arithmetic is simpler in binary.
+
+## Notes
+
+- `events.jsonl` lines are UTF-8; decode each line with `errors="replace"` before `json.loads`.
+- The cache is per process; the `status` subcommand starts cold every time, which is fine.
+- Existing conventions: `from __future__ import annotations`, `SCREAMING_CASE` constants, private
+  helpers prefixed `_`, `pathlib` only, `unittest.TestCase` with fixtures in `setUp` using
+  `tempfile.TemporaryDirectory()`. The existing `HttpServerTests` fixture is the one to extend.
+- Ruff runs before pytest; an unused import fails the acceptance command.
+- **Do not start `serve` from a shell during your work** — it never exits and the tool call hangs.
+  Exercise the server only through the tests.
+
+---
+
+## The findings (13 total, 1-based `index`)
+
+```json
+[
+  {
+    "index": 1,
+    "source": "rv4-missing-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/status_page.py, collect_status — running run fields (`turns`, `tool_calls`, `last_activity_at`, `last_activity_seconds_ago`)",
+    "severity": "high",
+    "confidence": "verified",
+    "requirement": "\"Each entry in `running` (and therefore `current`) gains: `turns` — the number of lines in the run's `events.jsonl` whose JSON object has `\"type\": \"turn_end\"`; `tool_calls` — likewise for `\"type\": \"tool_execution_end\"`.\"",
+    "gap": "The individual functions `_count_events_incremental` and `_last_activity_at` are tested in isolation, but no test verifies that `collect_status` actually includes these fields in the running run record. If `collect_status` silently dropped them, no test would catch it.",
+    "proof": "Removed `turns`, `tool_calls`, `last_activity_at`, and `last_activity_seconds_ago` from `collect_status`'s running-run output; the full suite of 71 tests still passes.",
+    "found_by": [
+      "rv4-missing-coverage"
+    ]
+  },
+  {
+    "index": 2,
+    "source": "rv4-test-strength",
+    "axis": "test-strength",
+    "file": "scripts/status_page.py:291-293",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "`_format_detail` renders task detail in the HTML. Both `verify_passed=True` and `verify_passed=False` produce \"✗\". There is no test that checks for \"✓\" when `verify_passed=True`. The only HTML test for this area (`test_verify_passed_false_show_x`) only asserts \"✗\" with `verify_passed=False`, which is satisfied by either branch of the mutation.",
+    "mutation": "Changed `_format_detail` task branch: `if vp is True: parts.append(\"✗\")` and `elif vp is False: parts.append(\"✗\")` — both pass/fail render as \"✗\"",
+    "result": "71 passed",
+    "why": "A successfully verified task would display \"✗\" in the detail column, making it indistinguishable from a failed task. Users would see false negatives.",
+    "found_by": [
+      "rv4-test-strength"
+    ]
+  },
+  {
+    "index": 3,
+    "source": "rv4-error-paths",
+    "axis": "error-paths",
+    "file": "scripts/status_page.py:381",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "TypeError escapes to user when `recorded_at` in `run.json` is not a string",
+    "why": "When a finished run's `run.json` has `\"recorded_at\": 99999` (a number instead of an ISO-8601 string), `datetime.fromisoformat(99999)` raises `TypeError`. The surrounding `except (KeyError, ValueError)` does not catch `TypeError`, so the traceback reaches the caller. This affects both `GET /` and `GET /status.json` through the HTTP handler.",
+    "repro": "python -c \"import tempfile,json; from pathlib import Path; d=tempfile.mkdtemp(); (Path(d)/'started.json').write_text(json.dumps({'kind':'task','task_id':'t','title':'T','started_at':'2026-08-19T10:00:00+00:00'})); (Path(d)/'run.json').write_text(json.dumps({'recorded_at':99999})))\" then call collect_status",
+    "evidence": "`TypeError: fromisoformat: argument must be str` — traceback printed to server stderr; HTTP client receives `RemoteDisconnected",
+    "found_by": [
+      "rv4-error-paths"
+    ]
+  },
+  {
+    "index": 4,
+    "source": "rv4-error-paths",
+    "axis": "error-paths",
+    "file": "scripts/status_page.py:406-407",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "TypeError escapes when `started_at` is a non-string (e.g. number) or a naive ISO-8601 string (no tzinfo)",
+    "why": "Two distinct code paths both hit this: (a) `datetime.fromisoformat(12345)` raises `TypeError` — same root cause as Finding 1 but for the running-run path; (b) `datetime.fromisoformat('2026-08-19T10:00:00')` returns a naive datetime, then `now - started_dt` (where `now` is UTC-aware) raises `TypeError: can't subtract offset-naive and offset-aware datetimes`. Neither is caught by `except (KeyError, ValueError)`. A host that writes `started.json` without timezone info will silently crash the status page.",
+    "repro": "python -c \"import tempfile,json; from pathlib import Path; d=tempfile.mkdtemp(); (Path(d)/'started.json').write_text(json.dumps({'kind':'task','task_id':'t','title':'T','started_at':'2026-08-19T10:00:00'})))\" then call collect_status",
+    "evidence": "`TypeError: can't subtract offset-naive and offset-aware datetimes` — traceback to stderr; `RemoteDisconnected` on HTTP clients",
+    "found_by": [
+      "rv4-error-paths"
+    ]
+  },
+  {
+    "index": 5,
+    "source": "rv4-test-strength",
+    "axis": "test-strength",
+    "file": "scripts/status_page.py:571-578",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "The `if current` / `elif result[\"recent\"]` chain determines whether the page header says \"RUNNING: …\" or \"idle — last run finished …\". Swapping the conditions means a page with both a running run and finished runs would incorrectly show \"idle\" instead of \"RUNNING\". No HTML test creates a fixture with both kinds of runs and verifies the status text; the fixture with a running run (`test_running_status_line`) has no finished runs, so `result[\"recent\"]` is empty and the `elif current` branch fires.",
+    "mutation": "Replaced `if current:` / `elif result[\"recent\"]:` with `if result[\"recent\"]:` / `elif current:` — checks for finished runs before checking for a running run",
+    "result": "71 passed",
+    "why": "When a pipeline is executing a new run while older runs are visible in the table, the page header would say \"idle\" and a user would not know something is running.",
+    "found_by": [
+      "rv4-test-strength"
+    ]
+  },
+  {
+    "index": 6,
+    "source": "rv4-consistency",
+    "axis": "consistency",
+    "file": "scripts/status_page.py:655-662",
+    "severity": "high",
+    "confidence": "verified",
+    "problem": "Groups header counts (running/finished) include all runs from `all_runs`, but the HTML table iterates only `result[\"recent\"]` which contains finished runs only (capped at 10). Running runs never appear in any table row despite the header declaring them.",
+    "why": "`_serve_html` loops `for run in result[\"recent\"]` (line ~655), but `result[\"recent\"]` only holds finished runs — running runs are in `result[\"running\"]`, never in `recent`. The group header (`Pipeline: f03 (1 running, 2 finished)`) is built from `all_runs` which correctly counts running runs, so the header says \"1 running\" while the table shows 0 running rows. On 12+ finished runs the gap is wider: the group lists 12 runs but the table can only show 10.",
+    "repro": "Create 1 running run + 5 finished runs in pipeline \"f03\". Run: `python -c \"exec(open('/tmp/check2.py').read())\"` (standalone script in /tmp/check2.py)",
+    "evidence": "groups[\"f03\"][\"running\"] = 1, but HTML table iterates `result[\"recent\"]` (5 finished runs) and finds 0 running rows. The running run \"f03-run1\" is present in `groups[...][\"runs\"]` and `result[\"running\"]` but never rendered. With 12 finished runs: groups[\"f03\"][\"runs\"] has 12 entries, recent is capped at 10, table shows 10 rows — 2 runs hidden.",
+    "found_by": [
+      "rv4-consistency"
+    ]
+  },
+  {
+    "index": 7,
+    "source": "rv4-missing-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/status_page.py, _detail_review",
+    "severity": "medium",
+    "confidence": "verified",
+    "requirement": "\"Review detail: `timed_out` (as above)\" — the spec defines this as reading from `worker.timed_out` or `worker.idle_timed_out` when present, falling back to top-level keys.",
+    "gap": "`_detail_review` has a branch for `isinstance(worker, dict)` that reads `timed_out` from the worker dict, and an else branch for top-level keys. No test provides `worker` as a dict in terminal_data for a review run. The existing `test_review_findings` test uses minimal terminal data (only `recorded_at`) and only asserts on `findings`.",
+    "proof": "Made `_detail_review` always return `timed_out=True` regardless of input. All 71 tests pass unchanged because no review test asserts on `timed_out`.",
+    "found_by": [
+      "rv4-missing-coverage"
+    ]
+  },
+  {
+    "index": 8,
+    "source": "rv4-missing-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/status_page.py, _format_duration",
+    "severity": "medium",
+    "confidence": "verified",
+    "requirement": "\"``59.0 → \"0:59\"``, ``3599.0 → \"59:59\"``, ``3600.0 → \"1:00:00\"``, ``3725.0 → \"1:02:05\"``.\"",
+    "gap": "Only 5.0, 0.0, 330.0, 3600.0, and 3723.0 are tested. The spec's boundary values 59.0, 3599.0, and 3725.0 have no test. An off-by-one in the boundary (< 3600 → < 3599) would cause 3599.0 to format as \"0:59:59\" instead of \"59:59\", and the existing suite would not detect it.",
+    "proof": "Changed `< 3600` to `< 3599` in `_format_duration`. `3599.0 → \"0:59:59\"` (wrong). All 71 tests pass unchanged. `3600.0` and `3723.0` still pass because they take the `h:mm:ss` branch even with the broken boundary.",
+    "found_by": [
+      "rv4-missing-coverage"
+    ]
+  },
+  {
+    "index": 9,
+    "source": "rv4-test-strength",
+    "axis": "test-strength",
+    "file": "scripts/status_page.py:583-595",
+    "severity": "medium",
+    "confidence": "verified",
+    "problem": "The current-run panel renders title, kind, id, pipeline, elapsed, turns, and tool calls from the `current` dict. No test verifies any of these individual values in the panel. `test_html_200_contains_current_title` only checks that the string \"Current run\" (the `<h2>` heading) is present. `test_running_status_line` and `test_html_escapes_html_in_title` check the status_text (which uses `current.get('title', '')` but is separate from the panel). If all panel values were empty strings, every test would pass.",
+    "mutation": "Replaced all `c_title`, `c_kind`, `c_id`, `c_pipeline`, `c_duration`, `c_turns`, `c_tool_calls` assignments with hardcoded empty/zero values instead of reading from `current",
+    "result": "71 passed",
+    "why": "The current-run panel would display blank fields (Title: , Kind: , ID: , etc.) even while a run is in progress. The status bar would show the title, but the detailed panel below would be empty.",
+    "found_by": [
+      "rv4-test-strength"
+    ]
+  },
+  {
+    "index": 10,
+    "source": "rv4-error-paths",
+    "axis": "error-paths",
+    "file": "scripts/status_page.py:61",
+    "severity": "medium",
+    "confidence": "verified",
+    "problem": "`_format_duration` raises `ValueError` on NaN and `OverflowError` on infinity",
+    "why": "`int(seconds)` raises `ValueError` for `float('nan')` and `OverflowError` for `float('inf')`. In normal flow `duration_seconds` comes from `total_seconds()` on datetime arithmetic so these values are impossible. However the function is public, imported by tests, and callable directly — an external caller can trigger crashes.",
+    "repro": "python -c \"from status_page import _format_duration; _format_duration(float('nan'))\"",
+    "evidence": "`ValueError: cannot convert float NaN to integer` / `OverflowError: cannot convert float infinity to integer --- ### Additional observations (not defect-level) - **`_detail_triage` accepts any iterable for `attempts`**: `len(terminal_data.get(\"attempts\", []))` on a string like `\"not-a-list\"` returns 10. This is technically wrong but low risk — `valid` must be `True` for this code path, meaning a real triage JSON would have a list. - **Pipeline values of non-string type**: `pipeline: 0` or `pipeline: \"\"` pass through to the groups map as distinct keys. The spec says pipeline is \"the first dash-separated token\" — a non-string would be unusual but not broken. --- ### Summary of testing | Case | Tested? | How | |---|---|---| | 1. File does not exist | Yes | runs_dir non-existent, events.jsonl missing, review.md missing | | 2. Path is a directory | Yes | started.json as dir, events.jsonl as dir, review.md as dir | | 3. Not valid JSON | Yes | Garbage bytes, BOM, null bytes in review.md, binary events.jsonl | | 4. Valid JSON wrong shape | Yes | Array, scalar, empty object as started.json; non-dict JSON per events.jsonl line | | 5. Unreadable / permissions | Partial | Directory-as-file covers the principle; actual permission-denied not testable on Windows | | 6. Required arg absent / empty | Yes | No subcommand (exit 1), bad port (exit 2), empty port, empty datetime | | 7. Empty collection | Yes | Empty runs dir, empty attempts, empty tasks, empty events file | | 8. Value outside permitted set | Yes | NaN, infinity, negative duration, unknown kind, pipeline as int/empty string, 12 runs exceeding `recent` cap | SUMMARY: error-paths=3 blocking=2 cases-tested=8",
+    "found_by": [
+      "rv4-error-paths"
+    ]
+  },
+  {
+    "index": 11,
+    "source": "rv4-missing-coverage",
+    "axis": "missing-coverage",
+    "file": "scripts/status_page.py, _format_detail — HTML rendering for review and triage kinds",
+    "severity": "low",
+    "confidence": "verified",
+    "requirement": "\"Detail column rendered from `detail` — for tasks `✓`/`✗` plus `+added/−removed`, for reviews `<n> findings`, for triages `fix <n> · test <n> · defer <n> · drop <n>`.\"",
+    "gap": "No test verifies the HTML output contains the rendered review detail (\"`<n>` findings\") or triage detail (\"fix N · drop M\"). The `test_verify_passed_false_show_x` test only exercises the task `✗` path. The `✓` for `verify_passed=True` is also untested in HTML.",
+    "proof": "Made `_format_detail` return `\"\"` for both review and triage kinds. All 71 tests pass unchanged because no test checks the HTML body for review or triage detail text. SUMMARY: missing-coverage=4 blocking=2 requirements-listed=0 requirements-uncovered=4 restored=no",
+    "found_by": [
+      "rv4-missing-coverage"
+    ]
+  },
+  {
+    "index": 12,
+    "source": "rv4-consistency",
+    "axis": "consistency",
+    "file": "tests/test_status_page.py:910-912",
+    "severity": "low",
+    "confidence": "verified",
+    "problem": "The test docstring says \"two ### FINDING and one #### FINDING → findings==2\" but the actual assertion is `findings == 3`, and the review.md content has three lines starting with \"### FINDING\" (one, two, four) and one line starting with \"#### FINDING\" (three). The assertion is correct; the docstring is misleading.",
+    "why": "The docstring states 2 but the content has 3 matching lines. The code correctly counts all lines starting with \"### FINDING\", yielding 3. The test passes with `self.assertEqual(detail[\"findings\"], 3)`. This is a documentation inconsistency, not a code bug.",
+    "repro": "Read line 910-912 of tests/test_status_page.py — docstring says 2, assertion says 3, code produces 3.",
+    "evidence": "review.md = \"### FINDING one\\n### FINDING two\\n#### FINDING three\\n### FINDING four\\n\". Lines starting with \"### FINDING\": 3. Test assertion: `findings == 3`. Docstring: \"→ findings==2\". SUMMARY: consistency=2 blocking=1 relations-checked=5",
+    "found_by": [
+      "rv4-consistency"
+    ]
+  },
+  {
+    "index": 13,
+    "source": "rv4-test-strength",
+    "axis": "test-strength",
+    "file": "scripts/status_page.py:711-712",
+    "severity": "low",
+    "confidence": "suspected",
+    "problem": "The spec says the status line should be \"the first element of `<body>`\". No test verifies this ordering. `test_html_title_matches_status_line` checks that the title text appears somewhere in the body, but not at the top. The status line could appear after the current panel and all tests would pass.",
+    "mutation": "Swapped `{status_text}` and `{current_panel}` in the HTML `<body>` template",
+    "result": "71 passed",
+    "why": "The status line would not be the first element of `<body>` as the spec requires. Users seeing the page from top to bottom would encounter the current-run panel before the overall status (RUNNING / IDLE). SUMMARY: test-strength=4 blocking=2 mutations-run=15 restored=yes",
+    "found_by": [
+      "rv4-test-strength"
+    ]
+  }
+]
+```
+
+---
+
+## The diff of the branch against its base
+
+The diff is 50369 characters, too large to inline. Read it from
+`C:\Dev\homelab\experiments\local-llm-worker\evaluation\runs\tr-f04\under-triage.patch` or run `git diff main...HEAD` in the repository.

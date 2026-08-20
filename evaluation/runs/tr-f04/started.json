@@ -1,0 +1,9 @@
+{
+  "kind": "triage",
+  "task_id": "tr-f04",
+  "title": "Triage of worker/f04-status-page-detail (claude)",
+  "started_at": "2026-08-20T11:02:50+00:00",
+  "pipeline": "f04",
+  "branch": "worker/f04-status-page-detail",
+  "frontier": "claude"
+}

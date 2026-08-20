@@ -1,0 +1,73 @@
+---
+id: f04-status-page-detail-fix-01-harden-timestamp-parsing
+repo: C:\Dev\homelab\experiments\local-llm-worker
+category: bugfix
+complexity: medium
+verify: python -m ruff check scripts tests && python -m pytest -q
+base: worker/f04-status-page-detail
+branch: worker/f04-status-page-detail-fix-01
+---
+
+# Task: stop TypeError from escaping collect_status on non-string or naive timestamps
+
+**Edit `scripts/status_page.py` and `tests/test_status_page.py`. Nothing else.**
+
+This is a single, bounded fix. Do not refactor, do not improve anything the task does not name, and do not address any other review finding.
+
+## Current behavior
+
+`collect_status` parses timestamps at two places:
+
+- finished runs — `scripts/status_page.py:379-385`:
+  ```python
+  started_dt = datetime.fromisoformat(started["started_at"])
+  recorded_dt = datetime.fromisoformat(terminal_data["recorded_at"])
+  duration = (recorded_dt - started_dt).total_seconds()
+  except (KeyError, ValueError):
+  ```
+- running runs — `scripts/status_page.py:405-410`, same shape with `duration = (now - started_dt).total_seconds()`.
+
+`datetime.fromisoformat` raises **TypeError**, not ValueError, when handed a non-string (e.g. `"recorded_at": 99999`). Subtracting a naive datetime (from `"2026-08-19T10:00:00"`, no offset) from the timezone-aware `now` also raises **TypeError**. `except (KeyError, ValueError)` catches neither, so the exception leaves `collect_status`, tracebacks out of the `status` subcommand, and breaks `GET /` and `GET /status.json` (the client sees `RemoteDisconnected`).
+
+Repro: create a run directory with a valid `started.json` and a `run.json` of `{"recorded_at": 99999}`, then call `collect_status(runs_dir, now)`.
+
+## Desired behavior
+
+`collect_status` never raises for a badly typed or naive timestamp.
+
+- A `started_at` or `recorded_at` that is **not a string** makes that run join `unreadable` by directory name, exactly as an unparseable one already does — no exception, and the rest of the tree is still collected.
+- A **naive** ISO-8601 timestamp (no offset) is treated as UTC, the same rule `_parse_run`/`_parse_now` already applies at `scripts/status_page.py:44-47`. A run with a naive `started_at` therefore gets a normal, non-negative `duration_seconds`, not an error and not an `unreadable` entry.
+- Everything that already works keeps working: missing keys and malformed strings still land in `unreadable`, and every existing test passes unchanged.
+
+## Out of scope
+
+- Do not change the JSON shape: no new or renamed top-level keys, no new run-record keys, no change to the `recent` cap.
+- Do not change the HTML rendering.
+- Do not touch any file other than scripts/status_page.py and tests/test_status_page.py.
+- Do not address any other review finding.
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| finished run whose run.json is `{"recorded_at": 99999}` (started.json valid) — collect_status returns without raising and the directory name is in `unreadable` | the same `unreadable` assertion shape the existing `test_unreadable_terminal_truncated` uses at tests/test_status_page.py:214 — reuse it |
+| running run whose started.json has `"started_at": 12345` (no terminal file) — no exception, directory name in `unreadable`, `running` is empty | same as above: the existing `unreadable` list assertion |
+| running run with naive `"started_at": "2026-08-19T10:00:00"`, collect_status called with now = `2026-08-19T10:05:00+00:00` | `duration_seconds == 300.0` — naive means UTC, the rule already pinned by `test_naive_now_treated_as_utc` at tests/test_status_page.py:282 |
+| finished run with naive `"started_at": "2026-08-19T10:00:00"` and aware `"recorded_at": "2026-08-19T10:01:00+00:00"` | `duration_seconds == 60.0`, and the run appears in `recent`, not in `unreadable` |
+| `GET /status.json` served over a port-0 server against a tree containing the `{"recorded_at": 99999}` run | HTTP status 200 and a body that parses as JSON — copy the server fixture from the existing `HttpServerTests` (tests/test_status_page.py:423) |
+| regression: a run whose started.json has no `started_at` key at all | still in `unreadable`, unchanged from today's behaviour |
+
+## Acceptance criteria
+
+- [ ] Every case above passes.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes — the whole suite, not only the new tests.
+- [ ] No test that passed before your change fails after it; record the pass count before and after and state both in your summary.
+- [ ] Baseline on this branch is **150 passed, 6 subtests passed, ruff clean**, so any other failure is a regression.
+- [ ] Return a concise summary of what was modified and anything left unresolved.
+
+## Notes
+
+- The smallest honest fix is a small private helper (e.g. `_parse_timestamp(value)`) that returns an aware datetime or raises ValueError for anything it cannot handle, used by both call sites; then the existing `except (KeyError, ValueError)` keeps working unchanged.
+- Follow the module's conventions: `from __future__ import annotations`, private helpers prefixed `_`, pathlib only, `unittest.TestCase` with `tempfile.TemporaryDirectory()` fixtures in `setUp`.
+- Ruff runs before pytest — an unused import fails the acceptance command.
+- Generated by triage from review finding(s) 3, 4.
