@@ -1,0 +1,10 @@
+{
+  "kind": "task",
+  "task_id": "f04-status-page-detail-fix-02-render-running-rows",
+  "title": "show running runs as rows in their pipeline's table",
+  "started_at": "2026-08-20T11:17:09+00:00",
+  "pipeline": "f04",
+  "category": "bugfix",
+  "branch": "worker/f04-status-page-detail-fix-02",
+  "harness": "pi"
+}

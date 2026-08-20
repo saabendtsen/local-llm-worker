@@ -1,0 +1,10 @@
+{
+  "kind": "task",
+  "task_id": "f04-status-page-detail-fix-01-harden-timestamp-parsing",
+  "title": "stop TypeError from escaping collect_status on non-string or naive timestamps",
+  "started_at": "2026-08-20T11:11:36+00:00",
+  "pipeline": "f04",
+  "category": "bugfix",
+  "branch": "worker/f04-status-page-detail-fix-01",
+  "harness": "pi"
+}

@@ -1,0 +1,137 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+index 04f39c9..1ae0849 100644
+--- a/scripts/status_page.py
++++ b/scripts/status_page.py
+@@ -47,6 +47,18 @@ def _parse_now(text: str) -> datetime:
+     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+ 
+ 
++def _parse_timestamp(value: object) -> datetime:
++    """Parse *value* as an ISO-8601 datetime, treating naive as UTC.
++
++    Raises ``ValueError`` for anything that cannot be parsed — including
++    non-string types (int, list, *etc.*).
++    """
++    if not isinstance(value, str):
++        raise ValueError(f"not a string: {value!r}")
++    dt = datetime.fromisoformat(value)
++    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
++
++
+ def _port_number(text: str) -> int:
+     """Validate a port number in the range 0..65535."""
+     value = int(text)
+@@ -377,8 +389,8 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+             # Finished run — build the record and compute duration from the
+             # data in the files, not from the live clock.
+             try:
+-                started_dt = datetime.fromisoformat(started["started_at"])
+-                recorded_dt = datetime.fromisoformat(terminal_data["recorded_at"])
++                started_dt = _parse_timestamp(started["started_at"])
++                recorded_dt = _parse_timestamp(terminal_data["recorded_at"])
+                 duration = (recorded_dt - started_dt).total_seconds()
+             except (KeyError, ValueError):
+                 unreadable.append(entry.name)
+@@ -403,7 +415,7 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+         else:
+             # No terminal file — in-flight run.
+             try:
+-                started_dt = datetime.fromisoformat(started["started_at"])
++                started_dt = _parse_timestamp(started["started_at"])
+                 duration = (now - started_dt).total_seconds()
+             except (KeyError, ValueError):
+                 unreadable.append(entry.name)
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 89cb5c8..0c9a8eb 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -287,6 +287,89 @@ class CollectStatusTests(unittest.TestCase):
+         result = collect_status(self.runs, naive_now)
+         self.assertEqual(result["current"]["duration_seconds"], 300.0)
+ 
++    # -- non-string / naive timestamp edge cases
++
++    def test_finished_run_nonstring_recorded_at(self) -> None:
++        """run.json {\"recorded_at\": 99999} → directory in unreadable, no exception."""
++        _write_started(self.runs, "bad-ts", "task", "Bad timestamp",
++                       "2026-08-19T10:00:00+00:00")
++        (self.runs / "bad-ts" / "run.json").write_text(
++            json.dumps({"recorded_at": 99999}, indent=2), encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        self.assertIn("bad-ts", result["unreadable"])
++        self.assertEqual(result["unreadable"].count("bad-ts"), 1)
++        self.assertEqual(result["running"], [])
++        self.assertEqual(result["recent"], [])
++
++    def test_running_run_nonstring_started_at(self) -> None:
++        """started.json {\"started_at\": 12345} (no terminal) → unreadable, running empty."""
++        _write_started(self.runs, "bad-run", "task", "Bad started",
++                       "2026-08-19T10:00:00+00:00")
++        # Overwrite started_at to a non-string
++        run_dir = self.runs / "bad-run"
++        (run_dir / "started.json").write_text(
++            json.dumps({"kind": "task", "task_id": "bad-run",
++                        "title": "Bad started", "started_at": 12345}, indent=2),
++            encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        self.assertIn("bad-run", result["unreadable"])
++        self.assertEqual(result["running"], [])
++
++    def test_running_run_naive_started_at(self) -> None:
++        """Naive started_at (no offset) → treated as UTC, correct duration."""
++        now_dt = datetime(2026, 8, 19, 10, 5, 0, tzinfo=timezone.utc)
++        _write_started(self.runs, "naive-start", "task", "Naive started",
++                       "2026-08-19T10:00:00")
++        result = collect_status(self.runs, now_dt)
++        self.assertEqual(result["current"]["duration_seconds"], 300.0)
++
++    def test_finished_run_naive_started_aware_recorded(self) -> None:
++        """Naive started_at + aware recorded_at → correct 60s duration, in recent."""
++        run_dir = _write_started(self.runs, "naive-fin", "task", "Naive finished",
++                                 "2026-08-19T10:00:00")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["recent"][0]["duration_seconds"], 60.0)
++        self.assertEqual(result["recent"][0]["task_id"], "naive-fin")
++        self.assertNotIn("naive-fin", result["unreadable"])
++
++    def test_http_get_nonstring_recorded_at(self) -> None:
++        """GET /status.json with a tree containing recorded_at=99999 → 200, valid JSON."""
++        from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
++
++        _write_started(self.runs, "http-bad", "task", "Http bad ts",
++                       "2026-08-19T10:00:00+00:00")
++        (self.runs / "http-bad" / "run.json").write_text(
++            json.dumps({"recorded_at": 99999}, indent=2), encoding="utf-8")
++
++        handler = type(
++            "_HttpBadTsHandler",
++            (_StatusHandler,),
++            {"_runs_dir": self.runs},
++        )
++        srv = ThreadingHTTPServer((DEFAULT_HOST, 0), handler)
++        port = srv.server_address[1]
++        t = threading.Thread(target=srv.serve_forever, daemon=True)
++        t.start()
++        try:
++            resp = urlopen(f"http://127.0.0.1:{port}/status.json")
++            self.assertEqual(resp.status, 200)
++            data = json.loads(resp.read().decode())
++            self.assertIn("http-bad", data["unreadable"])
++        finally:
++            srv.shutdown()
++
++    def test_missing_started_at_key_still_unreadable(self) -> None:
++        """started.json without 'started_at' → still in unreadable."""
++        run_dir = self.runs / "no-key"
++        run_dir.mkdir()
++        (run_dir / "started.json").write_text(
++            json.dumps({"kind": "task", "task_id": "no-key",
++                        "title": "Missing key"}, indent=2),
++            encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        self.assertIn("no-key", result["unreadable"])
++
+ 
+ # ---------------------------------------------------------------------------
+ # CLI through subprocess

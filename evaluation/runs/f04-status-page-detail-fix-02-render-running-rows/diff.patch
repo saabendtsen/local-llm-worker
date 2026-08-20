@@ -1,0 +1,118 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+index 1ae0849..265b58f 100644
+--- a/scripts/status_page.py
++++ b/scripts/status_page.py
+@@ -632,7 +632,21 @@ class _StatusHandler(BaseHTTPRequestHandler):
+ 
+             # Table for this group's runs.
+             rows: list[str] = []
+-            for run in result["recent"]:
++
++            # Collect running runs for this group, then finished runs
++            # (capped at 10 by *recent*).  Both lists are already sorted
++            # newest-first by ``started_at``.
++            group_running = [
++                r for r in result["running"]
++                if r.get("pipeline") == group["pipeline"]
++            ]
++            group_finished = [
++                r for r in result["recent"]
++                if r.get("pipeline") == group["pipeline"]
++            ]
++            group_runs = group_running + group_finished
++
++            for run in group_runs:
+                 if run.get("pipeline") != group["pipeline"]:
+                     continue
+                 r_title = _html.escape(str(run.get("title", "")))
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 0c9a8eb..626781d 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -1261,6 +1261,86 @@ class HtmlRenderingTests(unittest.TestCase):
+         # The first element of body should contain the same text.
+         self.assertIn(title, body)
+ 
++    def test_running_and_finished_rows_in_table(self) -> None:
++        """One running + two finished in f04 → all three task_ids in body, <td>running</td> present."""
++        _write_started(
++            self.runs, "f04-running", "task", "F04 running",
++            "2026-08-19T10:00:00+00:00", pipeline="f04",
++        )
++        run_dir_new = _write_started(
++            self.runs, "f04-new", "task", "F04 new finished",
++            "2026-08-19T09:00:00+00:00", pipeline="f04",
++        )
++        _write_terminal(run_dir_new, "run.json", "2026-08-19T09:05:00+00:00")
++        run_dir_old = _write_started(
++            self.runs, "f04-old", "task", "F04 old finished",
++            "2026-08-19T08:00:00+00:00", pipeline="f04",
++        )
++        _write_terminal(run_dir_old, "run.json", "2026-08-19T08:05:00+00:00")
++
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++
++        self.assertIn("f04-running", body)
++        self.assertIn("f04-new", body)
++        self.assertIn("f04-old", body)
++        self.assertIn("<td>running</td>", body)
++
++    def test_header_and_rows_agree_on_running_count(self) -> None:
++        """Same tree → '(1 running, 2 finished)' and exactly one <td>running</td>."""
++        _write_started(
++            self.runs, "f04-running2", "task", "F04 running",
++            "2026-08-19T10:00:00+00:00", pipeline="f04",
++        )
++        run_dir_a = _write_started(
++            self.runs, "f04-n2", "task", "F04 new finished",
++            "2026-08-19T09:00:00+00:00", pipeline="f04",
++        )
++        _write_terminal(run_dir_a, "run.json", "2026-08-19T09:05:00+00:00")
++        run_dir_b = _write_started(
++            self.runs, "f04-o2", "task", "F04 old finished",
++            "2026-08-19T08:00:00+00:00", pipeline="f04",
++        )
++        _write_terminal(run_dir_b, "run.json", "2026-08-19T08:05:00+00:00")
++
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++
++        self.assertIn("(1 running, 2 finished)", body)
++        self.assertEqual(body.count("<td>running</td>"), 1)
++
++    def test_running_no_pipeline_under_no_pipeline_heading(self) -> None:
++        """Running run with no pipeline key appears under 'No pipeline', not under 'f04'."""
++        _write_started(
++            self.runs, "no-pl-running", "task", "No pipeline running",
++            "2026-08-19T10:00:00+00:00",
++        )
++        run_dir = _write_started(
++            self.runs, "f04-done", "task", "F04 done",
++            "2026-08-19T09:00:00+00:00", pipeline="f04",
++        )
++        _write_terminal(run_dir, "run.json", "2026-08-19T09:05:00+00:00")
++
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++
++        self.assertIn("<h2>Pipeline: No pipeline", body)
++        self.assertIn("no-pl-running", body)
++        self.assertIn("<h2>Pipeline: f04 (0 running, 1 finished)", body)
++
++    def test_regression_no_running_no_running_cell(self) -> None:
++        """Nothing running, one finished → no <td>running</td> in body."""
++        run_dir = _write_started(
++            self.runs, "reg-done", "task", "Regression test",
++            "2026-08-19T09:00:00+00:00",
++        )
++        _write_terminal(run_dir, "run.json", "2026-08-19T09:05:00+00:00")
++
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++
++        self.assertNotIn("<td>running</td>", body)
++
+ 
+ # ---------------------------------------------------------------------------
+ # JSON consistency and read-only

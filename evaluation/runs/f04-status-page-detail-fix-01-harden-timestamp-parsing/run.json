@@ -1,0 +1,52 @@
+{
+  "task_id": "f04-status-page-detail-fix-01-harden-timestamp-parsing",
+  "category": "bugfix",
+  "complexity": "medium",
+  "recorded_at": "2026-08-20T11:17:07+00:00",
+  "repo": "C:\\Dev\\homelab\\experiments\\local-llm-worker",
+  "branch": "worker/f04-status-page-detail-fix-01",
+  "base_commit": "d66ce27077a54dfb10d37de973a74fb45ceddb89",
+  "work_commit": "b5b8e6ca9f61102738b67bb1b73e8328690c7408",
+  "model": "local-worker/local-worker",
+  "harness": "pi",
+  "task_file": "evaluation\\tasks\\f04-status-page-detail-fix-01-harden-timestamp-parsing.md",
+  "shell_allowed": true,
+  "worker": {
+    "elapsed_seconds": 315.7,
+    "exit_code": 0,
+    "timed_out": false,
+    "idle_timed_out": false,
+    "stderr_tail": ""
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 5604,
+    "received_chars": 5604,
+    "reason": null
+  },
+  "events": {
+    "turns": 9,
+    "tool_calls": 10,
+    "tools_used": {
+      "edit": 4,
+      "read": 3,
+      "bash": 3
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "diff": {
+    "files_changed": 2,
+    "lines_added": 98,
+    "lines_removed": 3,
+    "files_created": []
+  },
+  "verify": {
+    "command": "python -m ruff check scripts tests && python -m pytest -q",
+    "exit_code": 0,
+    "passed": true,
+    "output_tail": "All checks passed!\n.................................................................. [ 42%]\n........................................................................ [ 88%]\n..................                                                       [100%]\n156 passed, 6 subtests passed in 13.71s"
+  },
+  "produced_no_changes": false,
+  "meaningful_pass": true
+}
