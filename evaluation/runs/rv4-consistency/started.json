@@ -1,0 +1,9 @@
+{
+  "kind": "review",
+  "task_id": "rv4-consistency",
+  "title": "Review of worker/f04-status-page-detail (review-focus-consistency)",
+  "started_at": "2026-08-20T06:22:57+00:00",
+  "pipeline": "f04",
+  "branch": "worker/f04-status-page-detail",
+  "axis": "review-focus-consistency"
+}

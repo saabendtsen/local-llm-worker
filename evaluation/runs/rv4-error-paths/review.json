@@ -1,0 +1,31 @@
+{
+  "review_id": "rv4-error-paths",
+  "recorded_at": "2026-08-20T06:22:56+00:00",
+  "branch": "worker/f04-status-page-detail",
+  "base": "main",
+  "spec": "evaluation\\tasks\\f04-status-page-detail.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 1491.9,
+  "timed_out": false,
+  "idle_timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 36,
+    "tool_calls": 37,
+    "tools_used": {
+      "bash": 35,
+      "read": 2
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 17477,
+    "received_chars": 17477,
+    "reason": null
+  },
+  "reviewer_modified_worktree": false,
+  "stderr_tail": ""
+}

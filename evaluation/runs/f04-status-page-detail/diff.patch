@@ -1,0 +1,1252 @@
+diff --git a/scripts/status_page.py b/scripts/status_page.py
+index c4e1eaa..04f39c9 100644
+--- a/scripts/status_page.py
++++ b/scripts/status_page.py
+@@ -26,6 +26,16 @@ TERMINAL_FILES = ("run.json", "review.json", "triage.json")
+ DEFAULT_HOST = "127.0.0.1"
+ DEFAULT_PORT = 8765
+ 
++EVENT_TURN = "turn_end"
++EVENT_TOOL = "tool_execution_end"
++
++# ---------------------------------------------------------------------------
++# Module-level cache for incremental event-file reading
++# ---------------------------------------------------------------------------
++
++# key: Path(str)  →  (bytes_consumed: int, turns: int, tool_calls: int)
++_events_cache: dict[str, tuple[int, int, int]] = {}
++
+ 
+ # ---------------------------------------------------------------------------
+ # Helpers
+@@ -46,11 +56,22 @@ def _port_number(text: str) -> int:
+ 
+ 
+ def _format_duration(seconds: float) -> str:
+-    """Format seconds as *m:ss*.  No hours prefix — 1 h 2 m 3 s → *62:03*."""
++    """Format seconds as *m:ss* or *h:mm:ss* (≥ 3600).
++
++    ``59.0 → "0:59"``, ``3599.0 → "59:59"``, ``3600.0 → "1:00:00"``,
++    ``3725.0 → "1:02:05"``.
++    """
+     total = int(seconds)
+-    minutes = total // 60
+-    secs = total % 60
+-    return f"{minutes}:{secs:02d}"
++    if total < 3600:
++        minutes = total // 60
++        secs = total % 60
++        return f"{minutes}:{secs:02d}"
++    else:
++        hours = total // 3600
++        remainder = total % 3600
++        minutes = remainder // 60
++        secs = remainder % 60
++        return f"{hours}:{minutes:02d}:{secs:02d}"
+ 
+ 
+ def _read_json_object(path: Path) -> dict[str, Any] | None:
+@@ -66,6 +87,236 @@ def _read_json_object(path: Path) -> dict[str, Any] | None:
+         return None
+ 
+ 
++def _read_pipeline(started: dict[str, Any]) -> str | None:
++    """Return the ``pipeline`` value from *started*, or ``None``."""
++    return started.get("pipeline")
++
++
++def _count_events_incremental(path: Path) -> tuple[int, int]:
++    """Return *(turns, tool_calls)* from *path*, reading incrementally.
++
++    The file grows over the life of a running run.  A module-level cache
++    keyed by the path's string holds ``(bytes_consumed, turns, tool_calls)``;
++    on each call only the delta is re-parsed.  If the file shrinks below
++    ``bytes_consumed`` (truncation / replacement), the cache is reset.
++
++    A partial last line (no trailing ``\\n``) is left unconsumed until it is
++    complete.
++    """
++    if not path.is_file():
++        return 0, 0
++
++    key = str(path)
++    cached = _events_cache.get(key)
++
++    file_size = path.stat().st_size
++
++    if cached is not None and file_size < cached[0]:
++        # File was truncated / replaced — start over.
++        cached = None
++
++    if cached is None:
++        consumed = 0
++        turns = 0
++        tool_calls = 0
++    else:
++        consumed, turns, tool_calls = cached
++
++    # Read only the delta.
++    try:
++        with path.open("rb") as fh:
++            fh.seek(consumed)
++            raw = fh.read()
++    except OSError:
++        if cached is None:
++            return 0, 0
++        return turns, tool_calls
++
++    if not raw:
++        if cached is not None:
++            _events_cache[key] = cached  # keep existing
++        else:
++            _events_cache[key] = (0, 0, 0)
++        return turns, tool_calls
++
++    # Split on b'\\n'.  If the last chunk is incomplete (no trailing newline)
++    # we leave it for next time.
++    lines = raw.split(b"\n")
++    incomplete = b""
++    if lines and not raw.endswith(b"\n"):
++        incomplete = lines.pop()  # last chunk without trailing newline
++
++    for line_bytes in lines:
++        if not line_bytes.strip():
++            continue
++        line_str = line_bytes.decode("utf-8", errors="replace")
++        try:
++            obj = json.loads(line_str)
++        except json.JSONDecodeError:
++            continue
++        if not isinstance(obj, dict):
++            continue
++        kind = obj.get("type")
++        if kind == EVENT_TURN:
++            turns += 1
++        elif kind == EVENT_TOOL:
++            tool_calls += 1
++
++    new_consumed = consumed + len(raw) - len(incomplete)
++    _events_cache[key] = (new_consumed, turns, tool_calls)
++    return turns, tool_calls
++
++
++def _last_activity_at(path: Path, now: datetime | None = None) -> tuple[str | None, float | None]:
++    """Return *(iso_timestamp, seconds_ago)* for *path*'s mtime.
++
++    Returns ``(None, None)`` when the file does not exist.
++    """
++    if not path.is_file():
++        return None, None
++    if now is None:
++        now = datetime.now(timezone.utc)
++    mtime = path.stat().st_mtime
++    mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
++    iso = mtime_dt.isoformat()
++    seconds_ago = round((now - mtime_dt).total_seconds(), 1)
++    return iso, seconds_ago
++
++
++def _detail_task(run_path: Path, started: dict[str, Any],
++                 terminal_data: dict[str, Any]) -> dict[str, Any]:
++    """Build the *detail* dict for a finished *task* run."""
++    result: dict[str, Any] = {}
++    verify = terminal_data.get("verify")
++    if isinstance(verify, dict):
++        result["verify_passed"] = verify.get("passed")
++    else:
++        result["verify_passed"] = None
++
++    result["meaningful_pass"] = terminal_data.get("meaningful_pass")
++
++    diff = terminal_data.get("diff")
++    if isinstance(diff, dict):
++        result["files_changed"] = diff.get("files_changed")
++        result["lines_added"] = diff.get("lines_added")
++        result["lines_removed"] = diff.get("lines_removed")
++    else:
++        result["files_changed"] = None
++        result["lines_added"] = None
++        result["lines_removed"] = None
++
++    events = terminal_data.get("events")
++    if isinstance(events, dict):
++        result["turns"] = events.get("turns")
++    else:
++        result["turns"] = None
++
++    worker = terminal_data.get("worker")
++    timed_out = False
++    if isinstance(worker, dict):
++        timed_out = bool(worker.get("timed_out") or worker.get("idle_timed_out"))
++    result["timed_out"] = timed_out
++
++    return result
++
++
++def _detail_review(review_path: Path, review_md: Path,
++                   started: dict[str, Any],
++                   terminal_data: dict[str, Any]) -> dict[str, Any]:
++    """Build the *detail* dict for a finished *review* run."""
++    result: dict[str, Any] = {}
++
++    events = terminal_data.get("events")
++    if isinstance(events, dict):
++        result["turns"] = events.get("turns")
++    else:
++        result["turns"] = None
++
++    timed_out = False
++    worker = terminal_data.get("worker")
++    if isinstance(worker, dict):
++        timed_out = bool(worker.get("timed_out") or worker.get("idle_timed_out"))
++    else:
++        # review.json uses top-level timed_out / idle_timed_out keys.
++        timed_out = bool(terminal_data.get("timed_out") or
++                         terminal_data.get("idle_timed_out"))
++    result["timed_out"] = timed_out
++
++    findings = 0
++    if review_md.is_file():
++        for line in review_md.read_text(encoding="utf-8", errors="replace").splitlines():
++            stripped = line.strip()
++            if stripped.startswith("### FINDING"):
++                findings += 1
++    result["findings"] = findings
++
++    return result
++
++
++def _detail_triage(terminal_data: dict[str, Any]) -> dict[str, Any]:
++    """Build the *detail* dict for a finished *triage* run."""
++    result: dict[str, Any] = {}
++    valid = terminal_data.get("valid")
++    result["valid"] = valid
++    if valid is not True:
++        result["attempts"] = None
++        result["tasks"] = None
++        result["dispositions"] = {}
++        return result
++
++    result["attempts"] = len(terminal_data.get("attempts", []))
++    tasks = terminal_data.get("tasks")
++    result["tasks"] = len(tasks) if isinstance(tasks, list) else None
++
++    triage = terminal_data.get("triage")
++    dispositions: dict[str, int] = {}
++    if isinstance(triage, dict):
++        for d in triage.get("dispositions", []):
++            if isinstance(d, dict):
++                disp = d.get("disposition")
++                if isinstance(disp, str):
++                    dispositions[disp] = dispositions.get(disp, 0) + 1
++    result["dispositions"] = dispositions
++    return result
++
++
++def _format_detail(kind: str, detail: dict[str, Any]) -> str:
++    """Render a *detail* dict as a human-readable string for the HTML table."""
++    if not detail:
++        return ""
++
++    if kind == "task":
++        parts = []
++        vp = detail.get("verify_passed")
++        if vp is True:
++            parts.append("✓")
++        elif vp is False:
++            parts.append("✗")
++        added = detail.get("lines_added")
++        removed = detail.get("lines_removed")
++        if added is not None and removed is not None:
++            parts.append(f"+{added}/−{removed}")
++        return " ".join(parts)
++
++    if kind == "review":
++        findings = detail.get("findings")
++        if findings is not None:
++            return f"{findings} findings"
++        return ""
++
++    if kind == "triage":
++        dispositions = detail.get("dispositions")
++        if isinstance(dispositions, dict) and dispositions:
++            labels = []
++            for k, v in dispositions.items():
++                # Capitalize first letter for display
++                labels.append(f"{k} {v}")
++            return " · ".join(labels)
++        return ""
++
++    return ""
++
++
+ # ---------------------------------------------------------------------------
+ # Core function — the seam for every test
+ # ---------------------------------------------------------------------------
+@@ -95,8 +346,12 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+             "recent": [],
+             "unreadable": [],
+             "ignored": 0,
++            "groups": [],
+         }
+ 
++    # First pass: collect all runs (both running and finished).
++    all_runs: list[dict[str, Any]] = []
++
+     for entry in runs_dir.iterdir():
+         if not entry.is_dir():
+             continue
+@@ -129,15 +384,22 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+                 unreadable.append(entry.name)
+                 continue
+ 
++            kind = started.get("kind")
++            task_id = started.get("task_id")
++            pipeline = _read_pipeline(started)
++
+             record: dict[str, Any] = {
+-                "kind": started.get("kind"),
+-                "task_id": started.get("task_id"),
++                "kind": kind,
++                "task_id": task_id,
+                 "title": started.get("title"),
+                 "started_at": started["started_at"],
+                 "duration_seconds": duration,
+                 "finished_at": terminal_data["recorded_at"],
++                "pipeline": pipeline,
++                "detail": _build_detail(kind, entry, terminal_data),
+             }
+             recent.append(record)
++            all_runs.append(record)
+         else:
+             # No terminal file — in-flight run.
+             try:
+@@ -147,14 +409,29 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+                 unreadable.append(entry.name)
+                 continue
+ 
++            kind = started.get("kind")
++            task_id = started.get("task_id")
++            pipeline = _read_pipeline(started)
++
++            # Live progress: turns, tool calls, last activity.
++            events_path = entry / "events.jsonl"
++            turns, tool_calls = _count_events_incremental(events_path)
++            last_activity_iso, last_activity_secs_ago = _last_activity_at(events_path, now)
++
+             record = {
+-                "kind": started.get("kind"),
+-                "task_id": started.get("task_id"),
++                "kind": kind,
++                "task_id": task_id,
+                 "title": started.get("title"),
+                 "started_at": started["started_at"],
+                 "duration_seconds": duration,
++                "pipeline": pipeline,
++                "turns": turns,
++                "tool_calls": tool_calls,
++                "last_activity_at": last_activity_iso,
++                "last_activity_seconds_ago": last_activity_secs_ago,
+             }
+             running.append(record)
++            all_runs.append(record)
+ 
+     # Sort: newest started first (descending by started_at).
+     running.sort(key=lambda r: r["started_at"], reverse=True)
+@@ -162,6 +439,9 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+ 
+     current = running[0] if running else None
+ 
++    # Build groups.
++    groups = _build_groups(all_runs, running, recent)
++
+     return {
+         "generated_at": now.isoformat(),
+         "current": current,
+@@ -169,9 +449,81 @@ def collect_status(runs_dir: Path, now: datetime | None = None) -> dict[str, Any
+         "recent": recent[:10],
+         "unreadable": unreadable,
+         "ignored": ignored,
++        "groups": groups,
+     }
+ 
+ 
++def _build_detail(kind: str | None, entry: Path,
++                  terminal_data: dict[str, Any]) -> dict[str, Any]:
++    """Return the *detail* dict for a finished run of the given *kind*."""
++    if kind == "task":
++        return _detail_task(entry, {}, terminal_data)
++    elif kind == "review":
++        review_md = entry / "review.md"
++        return _detail_review(entry, review_md, {}, terminal_data)
++    elif kind == "triage":
++        return _detail_triage(terminal_data)
++    return {}
++
++
++def _build_groups(all_runs: list[dict[str, Any]],
++                  running: list[dict[str, Any]],
++                  recent: list[dict[str, Any]]) -> list[dict[str, Any]]:
++    """Build the *groups* list, newest-first by newest started_at per group."""
++
++    # Group by pipeline value (None for missing).
++    groups_map: dict[str | None, list[dict[str, Any]]] = {}
++    for run in all_runs:
++        p = run.get("pipeline")
++        groups_map.setdefault(p, []).append(run)
++
++    groups_list: list[dict[str, Any]] = []
++    for pipeline, runs in groups_map.items():
++        # Sort runs newest first by started_at.
++        runs.sort(key=lambda r: r["started_at"], reverse=True)
++        # Count running vs finished.
++        n_running = sum(1 for r in runs if "finished_at" not in r)
++        n_finished = len(runs) - n_running
++        group = {
++            "pipeline": pipeline,
++            "running": n_running,
++            "finished": n_finished,
++            "runs": [r["task_id"] for r in runs],
++        }
++        groups_list.append(group)
++
++    # Sort groups: newest started_at of any member, descending.
++    def _group_key(g: dict[str, Any]) -> str:
++        # Find the newest started_at among all runs of this pipeline.
++        # We need the runs; re-derive from groups_map won't work here.
++        # Instead, find the max started_at from the group's runs.
++        # Since we already sorted runs newest-first, the first element is newest.
++        # But we don't have access to that here — use a simpler approach:
++        # sort by the first run's started_at (which is newest in each group).
++        # Actually, we need to pass more context. Let's just sort by the
++        # maximum started_at across all runs in each group.
++        # We'll fix this by computing the max directly.
++        return ""
++
++    # Compute group ordering properly.
++    pipeline_max_started: dict[str | None, str] = {}
++    for pipeline, runs in groups_map.items():
++        max_ts = max(r["started_at"] for r in runs)
++        pipeline_max_started[pipeline] = max_ts
++
++    groups_list.sort(
++        key=lambda g: pipeline_max_started.get(g["pipeline"], ""),
++        reverse=True,
++    )
++
++    # null-pipeline group goes last.
++    null_group = [g for g in groups_list if g["pipeline"] is None]
++    real_groups = [g for g in groups_list if g["pipeline"] is not None]
++    groups_list = real_groups + null_group
++
++    return groups_list
++
++
+ # ---------------------------------------------------------------------------
+ # Sub-commands
+ # ---------------------------------------------------------------------------
+@@ -215,62 +567,151 @@ class _StatusHandler(BaseHTTPRequestHandler):
+         result = collect_status(self._runs_dir, datetime.now(timezone.utc))
+         current = result["current"]
+ 
++        # Status line & title.
+         if current:
+-            title = _html.escape(str(current.get("title", "")))
+-            kind = _html.escape(str(current.get("kind", "")))
+-            task_id = _html.escape(str(current.get("task_id", "")))
+-            duration = _format_duration(current["duration_seconds"])
++            status_text = f"RUNNING: {_html.escape(str(current.get('title', '')))}"
++        elif result["recent"]:
++            # Find the newest finished run's finished_at.
++            newest_finished = result["recent"][0]  # already sorted newest first
++            finished_at = _html.escape(str(newest_finished.get("finished_at", "")))
++            status_text = f"idle — last run finished {finished_at}"
+         else:
+-            title = kind = task_id = duration = "idle"
+-
+-        rows: list[str] = []
+-        for run in result["recent"]:
+-            r_title = _html.escape(str(run.get("title", "")))
+-            r_kind = _html.escape(str(run.get("kind", "")))
+-            r_id = _html.escape(str(run.get("task_id", "")))
+-            r_dur = _format_duration(run["duration_seconds"])
+-            rows.append(
+-                f"      <tr>"
+-                f"<td>{r_id}</td>"
+-                f"<td>{r_kind}</td>"
+-                f"<td>{r_title}</td>"
+-                f"<td>{r_dur}</td>"
+-                f"</tr>"
+-            )
+-        rows_html = "\n".join(rows) if rows else "      <tr><td colspan=\"4\">No recent runs</td></tr>"
++            status_text = "IDLE"
++
++        # Current run panel.
++        if current:
++            c_title = _html.escape(str(current.get("title", "")))
++            c_kind = _html.escape(str(current.get("kind", "")))
++            c_id = _html.escape(str(current.get("task_id", "")))
++            c_pipeline = _html.escape(str(current.get("pipeline", "") or "—"))
++            c_duration = _format_duration(current["duration_seconds"])
++            c_turns = current.get("turns", 0)
++            c_tool_calls = current.get("tool_calls", 0)
++            c_last_activity = current.get("last_activity_seconds_ago")
++            if c_last_activity is not None:
++                c_activity_str = f"last activity {c_last_activity}s ago"
++            else:
++                c_activity_str = ""
++            current_panel = f"""\
++<h2>Current run</h2>
++<p>
++  <strong>Title:</strong> {c_title} &nbsp;
++  <strong>Kind:</strong> {c_kind} &nbsp;
++  <strong>ID:</strong> {c_id} &nbsp;
++  <strong>Pipeline:</strong> {c_pipeline} &nbsp;
++  <strong>Elapsed:</strong> {c_duration}
++</p>
++<p>
++  <strong>Turns:</strong> {c_turns} &nbsp;
++  <strong>Tool calls:</strong> {c_tool_calls}
++  {f'<br><strong>{c_activity_str}</strong>' if c_activity_str else ''}
++</p>"""
++        else:
++            current_panel = "<h2>Current run</h2><p>None</p>"
++
++        # Build groups and tables.
++        section_parts: list[str] = []
++        for group in result["groups"]:
++            g_pipeline = _html.escape(str(group["pipeline"])) if group["pipeline"] is not None else "No pipeline"
++            g_running = group["running"]
++            g_finished = group["finished"]
++
++            section_parts.append(f"<h2>Pipeline: {g_pipeline} ({g_running} running, {g_finished} finished)</h2>")
++
++            # Table for this group's runs.
++            rows: list[str] = []
++            for run in result["recent"]:
++                if run.get("pipeline") != group["pipeline"]:
++                    continue
++                r_title = _html.escape(str(run.get("title", "")))
++                r_kind = _html.escape(str(run.get("kind", "")))
++                r_id = _html.escape(str(run.get("task_id", "")))
++                r_dur = _format_duration(run["duration_seconds"])
++
++                # State column.
++                if "finished_at" in run:
++                    state = "finished"
++                else:
++                    state = "running"
++
++                # Detail column.
++                detail_str = _format_detail(run.get("kind"), run.get("detail", {}))
++                if detail_str:
++                    detail_str = _html.escape(detail_str)
++
++                started_at_raw = run.get("started_at", "")
++                if started_at_raw:
++                    try:
++                        dt = datetime.fromisoformat(started_at_raw)
++                        if dt.tzinfo:
++                            started_local = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")
++                        else:
++                            started_local = dt.strftime("%Y-%m-%d %H:%M:%S")
++                        started_at = _html.escape(started_local)
++                    except ValueError:
++                        started_at = _html.escape(started_at_raw)
++                else:
++                    started_at = "\u2014"
++
++                row_td = "<td>{}</td>".format
++                rows.append(
++                    "<tr>"
++                    + row_td(r_id)
++                    + row_td(r_kind)
++                    + row_td(r_title)
++                    + row_td(state)
++                    + f"<td title='UTC start: {_html.escape(str(started_at_raw))}'>{started_at}</td>"
++                    + row_td(r_dur)
++                    + row_td(detail_str)
++                    + "</tr>"
++                )
++
++            if not rows:
++                rows.append("<tr><td colspan=\"7\">No recent runs in this group</td></tr>")
++            rows_html = "\n".join(rows)
++
++            section_parts.append(f"""\
++<div style="overflow-x: auto;">
++<table>
++<thead>
++  <tr><th>ID</th><th>Kind</th><th>Title</th><th>State</th><th>Started (local time)</th><th>Duration</th><th>Detail</th></tr>
++</thead>
++<tbody>
++{rows_html}
++</tbody>
++</table>
++</div>""")
++
++        if not section_parts:
++            section_parts.append("<h2>Pipelines</h2><p>No runs yet.</p>")
++
++        sections_html = "\n".join(section_parts)
+ 
+         page = f"""\
+ <!DOCTYPE html>
+ <html>
+ <head>
+-<title>Local Worker Status</title>
++<title>{status_text}</title>
+ <meta http-equiv="refresh" content="10">
++<meta name="viewport" content="width=device-width, initial-scale=1">
+ <style>
+   body {{ font-family: sans-serif; margin: 2em; }}
+   table {{ border-collapse: collapse; width: 100%; }}
+   th, td {{ border: 1px solid #ccc; padding: 4px 8px; text-align: left; }}
+   th {{ background: #f4f4f4; }}
++  h1 {{ font-size: 1.4em; }}
++  h2 {{ font-size: 1.1em; margin-top: 1.5em; }}
++  @media (max-width: 600px) {{
++    body {{ margin: 1em; }}
++    .scrollable {{ overflow-x: auto; }}
++  }}
+ </style>
+ </head>
+ <body>
+-<h1>Local Worker Status</h1>
+-<p>Generated at: {_html.escape(result["generated_at"])}</p>
+-<h2>Current</h2>
+-<p>
+-  <strong>Title:</strong> {title} &nbsp;
+-  <strong>Kind:</strong> {kind} &nbsp;
+-  <strong>ID:</strong> {task_id} &nbsp;
+-  <strong>Elapsed:</strong> {duration}
+-</p>
++{status_text}
++{current_panel}
+ <h2>Recent runs</h2>
+-<table>
+-<thead>
+-  <tr><th>ID</th><th>Kind</th><th>Title</th><th>Duration</th></tr>
+-</thead>
+-<tbody>
+-{rows_html}
+-</tbody>
+-</table>
++{sections_html}
+ </body>
+ </html>
+ """
+@@ -342,4 +783,4 @@ if __name__ == "__main__":
+     try:
+         raise SystemExit(main())
+     except SystemExit:
+-        raise
++        raise
+\ No newline at end of file
+diff --git a/tests/test_status_page.py b/tests/test_status_page.py
+index 2336193..89cb5c8 100644
+--- a/tests/test_status_page.py
++++ b/tests/test_status_page.py
+@@ -3,6 +3,7 @@
+ from __future__ import annotations
+ 
+ import json
++import os
+ import subprocess
+ import sys
+ import tempfile
+@@ -670,14 +671,592 @@ class DurationFormatTests(unittest.TestCase):
+         self.assertEqual(_format_duration(5.0), "0:05")
+ 
+     def test_exceeds_one_hour(self) -> None:
+-        """62 minutes → 62:00, not 1:02:00."""
++        """3600+ seconds → h:mm:ss format."""
+         from status_page import _format_duration
+-        self.assertEqual(_format_duration(3723.0), "62:03")
++        self.assertEqual(_format_duration(3600.0), "1:00:00")
++        self.assertEqual(_format_duration(3723.0), "1:02:03")
+ 
+     def test_zero(self) -> None:
+         from status_page import _format_duration
+         self.assertEqual(_format_duration(0.0), "0:00")
+ 
+ 
++# ---------------------------------------------------------------------------
++# Incremental event-file reader
++# ---------------------------------------------------------------------------
++
++class IncrementalReaderTests(unittest.TestCase):
++    """Test the incremental _count_events_incremental over temporary files."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.events = Path(self.tmpdir.name) / "events.jsonl"
++        # Clear the module cache so tests are isolated.
++        import status_page
++        status_page._events_cache.clear()
++
++    def tearDown(self) -> None:
++        self.tmpdir.cleanup()
++        import status_page
++        status_page._events_cache.clear()
++
++    def _write_events(self, lines: list[bytes]) -> None:
++        """Write *lines* (raw bytes) to the events file."""
++        self.events.write_bytes(b"\n".join(lines) + b"\n")
++
++    def _write_events_raw(self, data: bytes) -> None:
++        """Write exact bytes to the events file."""
++        self.events.write_bytes(data)
++
++    def test_basic_counts(self) -> None:
++        """3 turn_end, 2 tool_execution_end, 1 text, 1 not json → turns==3, tool_calls==2."""
++        lines = [
++            b'{"type":"turn_end"}',
++            b'{"type":"turn_end"}',
++            b'{"type":"turn_end"}',
++            b'{"type":"tool_execution_end"}',
++            b'{"type":"tool_execution_end"}',
++            b'{"type":"text"}',
++            b"not json at all",
++        ]
++        self._write_events(lines)
++        import status_page
++        turns, tool_calls = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns, 3)
++        self.assertEqual(tool_calls, 2)
++
++    def test_incremental_append(self) -> None:
++        """Read once (1 turn), append one more turn_end, read again → turns==2."""
++        self._write_events([
++            b'{"type":"turn_end"}',
++            b'{"type":"tool_execution_end"}',
++        ])
++        import status_page
++        turns, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns, 1)
++        # Append another turn_end line.
++        self._write_events([
++            b'{"type":"turn_end"}',
++            b'{"type":"tool_execution_end"}',
++            b'{"type":"turn_end"}',
++        ])
++        turns, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns, 2)
++
++    def test_incremental_proven_overwrite_first_line(self) -> None:
++        """Read once with 2 turn_end lines; overwrite first line in-place with same byte length; read again → counts unchanged.
++
++        A reader that re-reads from byte 0 would count one extra turn.
++        A correct incremental reader that only reads the appended delta
++        must return the same counts.
++        """
++        # Each line is exactly 20 bytes: {"type":"turn_end"}\n = 20 bytes
++        line = b'{"type":"turn_end"}\n'  # 20 bytes
++        self._write_events_raw(line + line)  # 40 bytes total
++        import status_page
++        turns1, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns1, 2)
++
++        # Overwrite first line in-place with a *different* turn_end line padded
++        # to exactly the same byte length (20 bytes).
++        new_line = b'{"type":"turn_end  "}\n'  # 20 bytes (same length)
++        with self.events.open("rb") as fh:
++            data = fh.read()
++        self.assertEqual(len(data), 40)
++        # Replace first 20 bytes
++        data = new_line + data[20:]
++        with self.events.open("wb") as fh:
++            fh.write(data)
++
++        # Read again — a correct incremental reader should NOT re-count.
++        turns2, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns2, 2)  # unchanged
++
++    def test_partial_last_line(self) -> None:
++        """File ends with incomplete JSON object (no trailing newline); read; complete; read again."""
++        # Write one complete line + a partial line.
++        self.events.write_bytes(b'{"type":"turn_end"}\n{"type":"turn_en')
++        import status_page
++        turns1, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns1, 1)  # only the complete line counted
++
++        # Complete the partial line and add a newline.
++        self.events.write_bytes(b'{"type":"turn_end"}\n{"type":"turn_end"}\n')
++        turns2, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns2, 2)  # now counts both
++
++    def test_file_shrinks(self) -> None:
++        """File shrinks below stored offset → counts restart from zero."""
++        self._write_events([
++            b'{"type":"turn_end"}',
++            b'{"type":"turn_end"}',
++            b'{"type":"turn_end"}',
++        ])
++        import status_page
++        turns1, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns1, 3)
++
++        # Shrink file to contain only one line.
++        self.events.write_bytes(b'{"type":"turn_end"}\n')
++        turns2, _ = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns2, 1)  # restarted from zero
++
++    def test_no_events_file(self) -> None:
++        """No events.jsonl → turns==0, tool_calls==0."""
++        import status_page
++        turns, tool_calls = status_page._count_events_incremental(self.events)
++        self.assertEqual(turns, 0)
++        self.assertEqual(tool_calls, 0)
++
++    def test_last_activity_at_none(self) -> None:
++        """No events file → last_activity_at is None, seconds_ago is None."""
++        import status_page
++        iso, secs = status_page._last_activity_at(self.events)
++        self.assertIsNone(iso)
++        self.assertIsNone(secs)
++
++    def test_last_activity_seconds_ago(self) -> None:
++        """Set file mtime to now−42s → last_activity_seconds_ago ≈ 42.0."""
++        import status_page
++        # Create the file so it has a real mtime.
++        self.events.write_bytes(b'{}\n')
++        now = datetime(2026, 8, 19, 10, 0, 0, tzinfo=timezone.utc)
++        mtime = now.timestamp() - 42
++        os.utime(self.events, (mtime, mtime))
++        iso, secs = status_page._last_activity_at(self.events, now)
++        self.assertIsNotNone(iso)
++        self.assertIsNotNone(secs)
++        self.assertAlmostEqual(secs, 42.0, delta=0.5)
++
++
++# ---------------------------------------------------------------------------
++# Per-kind detail for finished runs
++# ---------------------------------------------------------------------------
++
++class PerKindDetailTests(unittest.TestCase):
++    """Test detail extraction for each kind of finished run."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++        self.now = datetime(2026, 8, 19, 10, 0, 0, tzinfo=timezone.utc)
++
++    def tearDown(self) -> None:
++        self.tmpdir.cleanup()
++
++    def test_task_full_detail(self) -> None:
++        """Finished task with a rich run.json → expected detail dict."""
++        run_dir = _write_started(self.runs, "dt-full", "task", "Detail task",
++                                 "2026-08-19T10:00:00+00:00")
++        run_data = {
++            "recorded_at": "2026-08-19T10:06:32+00:00",
++            "verify": {"passed": True},
++            "meaningful_pass": True,
++            "diff": {"files_changed": 2, "lines_added": 10, "lines_removed": 3},
++            "events": {"turns": 7},
++            "worker": {"timed_out": False, "idle_timed_out": False},
++        }
++        (run_dir / "run.json").write_text(json.dumps(run_data, indent=2), encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(
++            detail,
++            {
++                "verify_passed": True,
++                "meaningful_pass": True,
++                "files_changed": 2,
++                "lines_added": 10,
++                "lines_removed": 3,
++                "turns": 7,
++                "timed_out": False,
++            },
++        )
++
++    def test_task_minimal_detail(self) -> None:
++        """Finished task with only recorded_at → every field None except timed_out=False."""
++        run_dir = _write_started(self.runs, "dt-min", "task", "Min task",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(detail["verify_passed"], None)
++        self.assertEqual(detail["meaningful_pass"], None)
++        self.assertEqual(detail["files_changed"], None)
++        self.assertEqual(detail["lines_added"], None)
++        self.assertEqual(detail["lines_removed"], None)
++        self.assertEqual(detail["turns"], None)
++        self.assertEqual(detail["timed_out"], False)
++
++    def test_review_findings(self) -> None:
++        """Review with review.md having two ### FINDING and one #### FINDING → findings==2."""
++        run_dir = _write_started(self.runs, "rv-f", "review", "Review findings",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "review.json", "2026-08-19T10:01:00+00:00")
++        review_md = (
++            "### FINDING one\n\n"
++            "### FINDING two\n\n"
++            "#### FINDING three\n\n"
++            "### FINDING four\n"
++        )
++        (run_dir / "review.md").write_text(review_md, encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(detail["findings"], 3)
++
++    def test_review_findings_exact_prefix(self) -> None:
++        """Only lines starting with '### FINDING' count. '#### FINDING' does not."""
++        run_dir = _write_started(self.runs, "rv-ex", "review", "Exact prefix",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "review.json", "2026-08-19T10:01:00+00:00")
++        (run_dir / "review.md").write_text(
++            "### FINDING one\n"
++            "#### FINDING not-counted\n",
++            encoding="utf-8",
++        )
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(detail["findings"], 1)
++
++    def test_review_no_review_md(self) -> None:
++        """Review with no review.md → findings==0."""
++        run_dir = _write_started(self.runs, "rv-no", "review", "No md",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "review.json", "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(detail["findings"], 0)
++
++    def test_triage_valid(self) -> None:
++        """Valid triage with attempts, tasks, dispositions → expected detail."""
++        run_dir = _write_started(self.runs, "tr-v", "triage", "Valid triage",
++                                 "2026-08-19T10:00:00+00:00")
++        triage_data = {
++            "recorded_at": "2026-08-19T10:02:00+00:00",
++            "valid": True,
++            "attempts": [{}, {}],
++            "tasks": [{}, {}, {}],
++            "triage": {
++                "dispositions": [
++                    {"disposition": "fix"},
++                    {"disposition": "fix"},
++                    {"disposition": "drop"},
++                ]
++            },
++        }
++        (run_dir / "triage.json").write_text(json.dumps(triage_data, indent=2), encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(
++            detail,
++            {
++                "valid": True,
++                "attempts": 2,
++                "tasks": 3,
++                "dispositions": {"fix": 2, "drop": 1},
++            },
++        )
++
++    def test_triage_invalid(self) -> None:
++        """Invalid triage with no triage key → dispositions=={}, tasks==0."""
++        run_dir = _write_started(self.runs, "tr-inv", "triage", "Invalid triage",
++                                 "2026-08-19T10:00:00+00:00")
++        triage_data = {
++            "recorded_at": "2026-08-19T10:02:00+00:00",
++            "valid": False,
++        }
++        (run_dir / "triage.json").write_text(json.dumps(triage_data, indent=2), encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(detail["valid"], False)
++        self.assertEqual(detail["attempts"], None)
++        self.assertEqual(detail["tasks"], None)
++        self.assertEqual(detail["dispositions"], {})
++
++    def test_triage_no_triage_key(self) -> None:
++        """triage.json without a 'triage' key → dispositions=={}."""
++        run_dir = _write_started(self.runs, "tr-nk", "triage", "No triage key",
++                                 "2026-08-19T10:00:00+00:00")
++        triage_data = {
++            "recorded_at": "2026-08-19T10:02:00+00:00",
++            "valid": True,
++            "attempts": [],
++            "tasks": [],
++        }
++        (run_dir / "triage.json").write_text(json.dumps(triage_data, indent=2), encoding="utf-8")
++        result = collect_status(self.runs, self.now)
++        detail = result["recent"][0]["detail"]
++        self.assertEqual(detail["valid"], True)
++        self.assertEqual(detail["attempts"], 0)
++        self.assertEqual(detail["tasks"], 0)
++        self.assertEqual(detail["dispositions"], {})
++
++    def test_unknown_kind_detail(self) -> None:
++        """Unknown kind → detail is empty dict."""
++        run_dir = _write_started(self.runs, "dk", "unknown_kind", "Unknown",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["recent"][0]["detail"], {})
++
++
++# ---------------------------------------------------------------------------
++# Pipeline grouping
++# ---------------------------------------------------------------------------
++
++class PipelineGroupTests(unittest.TestCase):
++    """Test pipeline grouping in collect_status."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++        self.now = datetime(2026, 8, 19, 10, 0, 0, tzinfo=timezone.utc)
++
++    def tearDown(self) -> None:
++        self.tmpdir.cleanup()
++
++    def test_two_pipelines_grouped(self) -> None:
++        """Three f03 runs (one running, two finished) + one no-pipeline → two groups."""
++        # f03 running
++        _write_started(self.runs, "f03-r1", "task", "F03 running",
++                       "2026-08-19T10:00:00+00:00", pipeline="f03")
++        # f03 finished (newer)
++        run_dir_f2 = _write_started(self.runs, "f03-f1", "task", "F03 finished",
++                                    "2026-08-19T09:00:00+00:00", pipeline="f03")
++        _write_terminal(run_dir_f2, "run.json", "2026-08-19T09:05:00+00:00")
++        # f03 finished (older)
++        run_dir_f3 = _write_started(self.runs, "f03-f2", "task", "F03 old",
++                                    "2026-08-19T08:00:00+00:00", pipeline="f03")
++        _write_terminal(run_dir_f3, "run.json", "2026-08-19T08:05:00+00:00")
++        # No pipeline
++        run_dir_np = _write_started(self.runs, "np-1", "task", "No pipeline",
++                                    "2026-08-19T09:30:00+00:00")
++        _write_terminal(run_dir_np, "run.json", "2026-08-19T09:35:00+00:00")
++
++        result = collect_status(self.runs, self.now)
++        groups = result["groups"]
++        self.assertEqual(len(groups), 2)
++
++        # First group: f03
++        f03_group = groups[0]
++        self.assertEqual(f03_group["pipeline"], "f03")
++        self.assertEqual(f03_group["running"], 1)
++        self.assertEqual(f03_group["finished"], 2)
++        self.assertEqual(f03_group["runs"], ["f03-r1", "f03-f1", "f03-f2"])
++
++        # Second group: no pipeline
++        null_group = groups[1]
++        self.assertIsNone(null_group["pipeline"])
++        self.assertEqual(null_group["running"], 0)
++        self.assertEqual(null_group["finished"], 1)
++        self.assertEqual(null_group["runs"], ["np-1"])
++
++    def test_pipeline_in_run_records(self) -> None:
++        """Every run record (running and finished) gains a pipeline key."""
++        run_dir = _write_started(self.runs, "rp1", "task", "R1",
++                                 "2026-08-19T10:00:00+00:00", pipeline="f03")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        _write_started(self.runs, "rp2", "task", "R2",
++                       "2026-08-19T10:05:00+00:00", pipeline="f03")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(result["recent"][0].get("pipeline"), "f03")
++        self.assertEqual(result["current"].get("pipeline"), "f03")
++
++    def test_pipeline_null_when_missing(self) -> None:
++        """Run without pipeline key → pipeline is None in record and groups."""
++        run_dir = _write_started(self.runs, "pn", "task", "Plain",
++                                 "2026-08-19T10:00:00+00:00")
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertIsNone(result["recent"][0].get("pipeline"))
++        null_groups = [g for g in result["groups"] if g["pipeline"] is None]
++        self.assertEqual(len(null_groups), 1)
++
++    def test_group_runs_includes_all_not_only_recent(self) -> None:
++        """Twelve finished f03 runs → recent has 10, but group runs has 12."""
++        for i in range(12):
++            run_dir = _write_started(
++                self.runs, f"f03-f{i:02d}", "task", f"F03 run {i}",
++                f"2026-08-19T{10 + i:02d}:00:00+00:00", pipeline="f03",
++            )
++            _write_terminal(run_dir, "run.json",
++                            f"2026-08-19T{10 + i:02d}:01:00+00:00")
++        result = collect_status(self.runs, self.now)
++        self.assertEqual(len(result["recent"]), 10)
++        f03_groups = [g for g in result["groups"] if g["pipeline"] == "f03"]
++        self.assertEqual(len(f03_groups), 1)
++        self.assertEqual(len(f03_groups[0]["runs"]), 12)
++
++
++# ---------------------------------------------------------------------------
++# HTML rendering — status line and detail column
++# ---------------------------------------------------------------------------
++
++class HtmlRenderingTests(unittest.TestCase):
++    """Exercise GET / over a port-0 server for status-line and detail rendering."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++        self._start_server()
++
++    def _start_server(self) -> None:
++        from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
++
++        self._handler_class = type(
++            "_RenderStatusHandler",
++            (_StatusHandler,),
++            {"_runs_dir": self.runs},
++        )
++        self.server = ThreadingHTTPServer((DEFAULT_HOST, 0), self._handler_class)
++        self.port = self.server.server_address[1]
++        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
++        self.server_thread.start()
++
++    def tearDown(self) -> None:
++        self.server.shutdown()
++        self.tmpdir.cleanup()
++
++    def test_running_status_line(self) -> None:
++        """GET / with a running run titled 'Build <thing>' → title+body contain RUNNING prefix."""
++        _write_started(self.runs, "r1", "task", "Build <thing>",
++                       "2026-08-19T10:00:00+00:00")
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++        self.assertIn("RUNNING: Build &lt;thing&gt;", body)
++
++    def test_idle_status_line_with_finished(self) -> None:
++        """GET / with one finished run → title+body contain 'idle' and finished_at."""
++        run_dir = _write_started(
++            self.runs, "done", "task", "Done",
++            "2026-08-19T09:00:00+00:00",
++        )
++        _write_terminal(run_dir, "run.json", "2026-08-19T09:05:00+00:00")
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++        self.assertIn("idle", body)
++        self.assertIn("2026-08-19T09:05:00+00:00", body)
++
++    def test_verify_passed_false_show_x(self) -> None:
++        """GET / with a finished task whose verify_passed is false → body contains ✗."""
++        run_dir = _write_started(
++            self.runs, "fail", "task", "Failed task",
++            "2026-08-19T09:00:00+00:00",
++        )
++        run_data = {
++            "recorded_at": "2026-08-19T09:05:00+00:00",
++            "verify": {"passed": False},
++        }
++        (run_dir / "run.json").write_text(json.dumps(run_data, indent=2), encoding="utf-8")
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++        self.assertIn("✗", body)
++
++    def test_media_query_present(self) -> None:
++        """GET / → body contains @media (max-width: 600px) and overflow-x."""
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++        self.assertIn("@media (max-width: 600px)", body)
++        self.assertIn("overflow-x", body)
++
++    def test_html_title_matches_status_line(self) -> None:
++        """<title> matches the status line that starts the <body>."""
++        run_dir = _write_started(
++            self.runs, "t1", "task", "Title test",
++            "2026-08-19T10:00:00+00:00",
++        )
++        _write_terminal(run_dir, "run.json", "2026-08-19T10:01:00+00:00")
++        resp = urlopen(f"http://127.0.0.1:{self.port}/")
++        body = resp.read().decode()
++        # Extract title and first body content.
++        import re as _re
++        title_match = _re.search(r"<title>(.*?)</title>", body)
++        self.assertIsNotNone(title_match)
++        title = title_match.group(1)
++        # The first element of body should contain the same text.
++        self.assertIn(title, body)
++
++
++# ---------------------------------------------------------------------------
++# JSON consistency and read-only
++# ---------------------------------------------------------------------------
++
++class JsonConsistencyTests(unittest.TestCase):
++    """Verify that /status.json matches collect_status and that no files are modified."""
++
++    def setUp(self) -> None:
++        self.tmpdir = tempfile.TemporaryDirectory()
++        self.runs = Path(self.tmpdir.name) / "runs"
++        self.runs.mkdir()
++        self._populate()
++        self._start_server()
++
++    def _populate(self) -> None:
++        _write_started(self.runs, "jc1", "task", "Json test",
++                       "2026-08-19T10:00:00+00:00", pipeline="f03")
++        run_dir = _write_started(self.runs, "jc2", "task", "Done",
++                                 "2026-08-19T09:00:00+00:00", pipeline="f03")
++        _write_terminal(run_dir, "run.json", "2026-08-19T09:05:00+00:00")
++
++    def _start_server(self) -> None:
++        from status_page import DEFAULT_HOST, ThreadingHTTPServer, _StatusHandler
++        self._handler_class = type(
++            "_JsonStatusHandler",
++            (_StatusHandler,),
++            {"_runs_dir": self.runs},
++        )
++        self.server = ThreadingHTTPServer((DEFAULT_HOST, 0), self._handler_class)
++        self.port = self.server.server_address[1]
++        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
++        self.server_thread.start()
++
++    def tearDown(self) -> None:
++        self.server.shutdown()
++        self.tmpdir.cleanup()
++
++    def test_status_json_matches_collect_status(self) -> None:
++        """GET /status.json body (minus generated_at and *_seconds_ago) equals collect_status."""
++        resp = urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        data = json.loads(resp.read().decode())
++        ref_now = datetime.fromisoformat(data.pop("generated_at"))
++        expected = collect_status(self.runs, ref_now)
++        expected.pop("generated_at")
++        # Strip *_seconds_ago for comparison (they depend on request time).
++        for run_list in ("running", "recent"):
++            for r in data.get(run_list, []):
++                r.pop("last_activity_seconds_ago", None)
++        if data.get("current"):
++            data["current"].pop("last_activity_seconds_ago", None)
++        for r in expected.get("running", []):
++            r.pop("last_activity_seconds_ago", None)
++        if expected.get("current"):
++            expected["current"].pop("last_activity_seconds_ago", None)
++        self.assertEqual(data, expected)
++
++    def test_read_only(self) -> None:
++        """collect_status and HTTP requests must not create or modify any file."""
++        def _snapshot() -> set[str]:
++            paths = set()
++            for p in self.runs.rglob("*"):
++                if p.is_file():
++                    paths.add(str(p))
++            return paths
++
++        before = _snapshot()
++
++        # collect_status
++        collect_status(self.runs, datetime.now(timezone.utc))
++
++        # HTTP requests
++        urlopen(f"http://127.0.0.1:{self.port}/status.json")
++        urlopen(f"http://127.0.0.1:{self.port}/")
++
++        after = _snapshot()
++        self.assertEqual(before, after,
++                         f"Files changed: +{after - before} -{before - after}")
++
++
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,286 @@
+# Review Task — internal consistency only
+
+You are reviewing a code change **you did not write**. You have one narrow job.
+
+**Your only subject: places where the code contradicts itself.** Two numbers that should agree and
+do not. A rule stated in one place and broken in another. A field documented as one thing and
+populated as another.
+
+Ignore style, naming, test quality, and whether the design is good. Another reviewer covers those.
+If you find something outside your remit, drop it.
+
+## Why this is hard, and how to actually do it
+
+A contradiction is invisible when you read code top to bottom, because each half looks right on its
+own. You cannot find these by reading. You find them by **computing the same quantity two different
+ways and comparing**.
+
+So: for every number, list, or flag the code produces, ask *"is this value derivable from something
+else the code also produces?"* If yes, derive it both ways on real data and check they match.
+
+## What to hunt
+
+1. **A total that should equal a sum of parts.** A summary count versus the sum of a per-category
+   breakdown. A "decided" count versus the number of decided items. Compute both. Compare.
+2. **The same concept counted under two different rules.** One place counts anything present;
+   another counts only valid entries. On clean data they agree, which is why this survives review —
+   feed it one invalid entry and they diverge.
+3. **A collection filtered in one place and not another.** An item excluded from one output but
+   included in a total that is supposed to describe the same set.
+4. **An invariant stated in a comment, docstring, or specification and violated in code.** Search
+   the change for words like "always", "never", "must", "exactly one". Then check.
+5. **A field described one way and populated another.** A key documented as a path that sometimes
+   holds `"unknown"`; a field called a count that can be `None`.
+6. **A special case that changes the answer's meaning.** An `if` that suppresses an output under
+   some condition, making the result discontinuous — one input yields nothing, a barely different
+   input yields a hundred entries.
+7. **Two entries in the same output using different conventions** — one dict listing all keys
+   including zeros, another omitting zero entries, so consumers must treat them differently.
+
+## How to work
+
+1. Read the specification for anything it says the output must contain, and any relation it states
+   between parts of the output.
+2. Run the code on the real data and capture the full output.
+3. **Write a small throwaway script** that recomputes the derivable quantities independently and
+   asserts they agree. Run it. Put it outside the repository.
+4. Then feed the code a case that is *not* clean — an invalid value, an empty input, a duplicate —
+   and re-check the same relations. **This is where the contradictions live.** Clean data hides them.
+5. Report only relations you actually computed and saw break.
+
+Do not modify anything in the repository.
+
+## Report
+
+Output only these blocks, nothing before or after.
+
+```
+### FINDING <n>
+axis: consistency
+file: <path>:<line-or-range>
+severity: high | medium | low
+confidence: verified | suspected
+problem: <the two things that disagree, named>
+why: <which is wrong, or why both cannot be right>
+repro: <the input that makes them diverge, and the command>
+evidence: <both values as you actually observed them>
+```
+
+`severity: high` means a consumer reading the output would draw a false conclusion.
+`confidence: verified` requires two concrete values you observed disagreeing. Without them it is
+`suspected`, and you may report at most two suspected findings.
+
+End with exactly one line:
+
+```
+SUMMARY: consistency=<n> blocking=<n> relations-checked=<n>
+```
+
+`relations-checked` is how many "these two should agree" pairs you actually computed both sides of.
+**An all-clear with `relations-checked=0` means you did not do the job.** Report it honestly.
+
+
+---
+
+## The change under review
+
+Branch `worker/f04-status-page-detail`, based on `main`. The repository is checked out at the branch tip,
+so every file is readable and the test suite is runnable.
+
+Get the diff with either:
+
+- `git diff main...HEAD` — run it yourself, or
+- read the file `C:\Dev\homelab\experiments\local-llm-worker\evaluation\runs\rv4-consistency\under-review.patch`, which holds the same diff.
+
+## Tool rules
+
+- **Never start a process that does not exit on its own** -- a server, a watcher, anything with
+  `serve`, `--watch`, or a `while True:` loop. The bash tool waits for the whole process group, so
+  `&` does not detach it and the call hangs until the run is killed. Exercise such code only
+  through its test suite, or through a Python snippet that starts it in a thread and shuts it down
+  in the same snippet. If you are about to type a command that would still be running a minute
+  later, do not run it.
+- Run the test suite and short one-off commands freely; nothing else.
+
+---
+
+## The task specification the change was meant to satisfy
+
+# Task: give the status page real detail — live progress, per-kind facts, pipeline grouping
+
+**Edit `scripts/status_page.py`.** Then **edit `tests/test_status_page.py`**. Change no other file.
+
+## Current behavior
+
+`scripts/status_page.py` (f03) lists runs from `evaluation/runs/<id>/`: a run with `started.json`
+and no terminal file is running; one with `run.json` / `review.json` / `triage.json` is finished.
+The JSON has `current`, `running`, `recent` (capped at 10), `unreadable`, `ignored`; each run
+record carries `kind`, `task_id`, `title`, `started_at`, `duration_seconds` and, when finished,
+`finished_at`. The HTML shows a one-line "Current" and a four-column table. It is correct and bare.
+
+What it cannot say: how far along the current run is, whether a finished task passed its
+acceptance command, how big its diff was, how many findings a review produced, what a triage
+decided, or which runs belong together. Tonight's `evaluation/runs/` holds an implement, four
+reviews, a triage and eight fixes for `f03` side by side with the same shape for `f02`, and the
+page shows them as one flat list.
+
+Since today every `started.json` also carries `"pipeline"` — the first dash-separated token of
+the spec id, so `f03-status-page`, `f03-fix-02-…`, the `rv3-*` reviews of it and `tr-f03-*` all
+say `"pipeline": "f03"`. Older directories lack the key.
+
+## Desired behavior
+
+The same two commands, the same files, stdlib only, no JavaScript, inline CSS only. Everything
+already in the JSON stays exactly as it is (existing tests must keep passing unchanged); the
+following is **added**.
+
+### 1. Live progress for running runs
+
+Each entry in `running` (and therefore `current`) gains:
+
+- `turns` — the number of lines in the run's `events.jsonl` whose JSON object has
+  `"type": "turn_end"`; `tool_calls` — likewise for `"type": "tool_execution_end"`. Both `0` when
+  the file does not exist yet.
+- `last_activity_at` — the file's mtime as an ISO-8601 UTC timestamp, `null` when absent;
+  `last_activity_seconds_ago` — `now − mtime`, rounded to one decimal, `null` when absent.
+
+**Reading must be incremental.** `events.jsonl` for one run grows to hundreds of megabytes — both
+harnesses re-emit the whole message on every token — and the page refreshes every ten seconds.
+Keep a module-level cache keyed by path holding `(bytes_consumed, turns, tool_calls)`; on each
+call read only from `bytes_consumed` to the current end, update the counts, store the new offset.
+If the file is smaller than `bytes_consumed` (truncated, replaced), start over from zero. Count a
+line only when it parses as a JSON object with the `type` key; skip malformed lines silently; a
+partial last line (no trailing newline) must not be consumed until it is complete — leave the
+offset before it.
+
+### 2. Per-kind detail for finished runs
+
+Each entry in `recent` gains `"detail"`, a dict whose content depends on `kind`:
+
+| kind | source | keys |
+| --- | --- | --- |
+| `task` | `run.json` | `verify_passed` (bool, from `verify.passed`), `meaningful_pass` (bool), `files_changed`, `lines_added`, `lines_removed` (from `diff`), `turns` (from `events.turns`), `timed_out` (true if `worker.timed_out` or `worker.idle_timed_out`) |
+| `review` | `review.json` + `review.md` | `turns` (from `events.turns`), `timed_out` (as above), `findings` — the number of lines in `review.md` that start with `### FINDING`, `0` if the file is missing |
+| `triage` | `triage.json` | `valid` (bool), `attempts` (length of `attempts`), `tasks` (length of `tasks` or `0`), and `dispositions` — a dict counting `triage.dispositions[*].disposition` values, e.g. `{"fix": 3, "fix-test-only": 3, "defer": 2, "drop": 2}`; `{}` when `triage` is absent or `valid` is false |
+
+Missing keys → `null` for that field, never an exception. `detail` is `{}` for an unknown kind.
+
+### 3. Pipeline grouping
+
+Each run record (running or finished) gains `"pipeline"` — the `started.json` value, or `null`.
+The top level gains `"groups"`: a list, newest first by the newest `started_at` in the group, of
+
+```json
+{"pipeline": "f03" | null, "running": <n>, "finished": <n>, "runs": ["<task_id>", ...]}
+```
+
+with `runs` listing **every** run of that pipeline (not only the ten in `recent`), newest first.
+Runs without a pipeline go in one group with `"pipeline": null`, last.
+
+### 4. The page
+
+`GET /` renders, top to bottom:
+
+- a **status line** as the first element of `<body>`, and also as the `<title>`: `RUNNING: <title>`
+  when something is in flight, else `IDLE — last run finished <finished_at of the newest finished run>`
+  or `IDLE` when nothing has ever run;
+- the **current run** panel: title, kind, id, pipeline, elapsed, turns, tool calls, and
+  "last activity Ns ago";
+- one **section per group**, headed by the pipeline name and its running/finished counts, with a
+  table: ID, kind, title, state, started (local time is fine, say so in the summary), duration,
+  and a detail column rendered from `detail` — for tasks `✓`/`✗` plus `+added/−removed`, for
+  reviews `<n> findings`, for triages `fix <n> · test <n> · defer <n> · drop <n>`;
+- durations as `m:ss` under an hour and `h:mm:ss` from an hour up (`3600.0` → `1:00:00`,
+  `59.0` → `0:59`);
+- a `<style>` block with a `@media (max-width: 600px)` rule that lets tables scroll horizontally
+  (`overflow-x: auto` on a wrapper) and drops the margin — the page is read from a phone.
+
+Every value reaching the page still passes through `html.escape`.
+
+## Key interfaces
+
+- `scripts/run_task.py` — `write_started()` for the marker's keys; `EVENT_TURN = "turn_end"` and
+  `EVENT_TOOL = "tool_execution_end"` are the event names, and `summarise_events()` shows how the
+  runner itself counts them.
+- `evaluation/runs/f03-fix-08-frozen-clock/run.json`, `rv3-error-paths/review.json` +
+  `review.md`, `tr-f03-claude/triage.json` — real finished examples of each kind, with the keys
+  above. Read them; do not modify or add to any real run directory.
+- `evaluation/runs/*/events-distilled.jsonl` — the committed, smaller form of an event stream;
+  its lines have the same `type` values as the raw file and will do for eyeballing.
+
+## Seams under test
+
+- **The pure function** `collect_status(runs_dir, now)` over hand-built fixtures. **[REQUIRED]**
+- **The incremental reader** as its own function over a temporary file. **[REQUIRED]**
+- **`GET /` and `GET /status.json`** on a port-0 server, as the existing `HttpServerTests` do.
+  **[REQUIRED]**
+
+## Cases the tests must cover
+
+| Case | Source of truth for the assertion |
+| --- | --- |
+| Running run with `events.jsonl` of three `{"type":"turn_end"}` lines, two `{"type":"tool_execution_end"}` lines, one `{"type":"text"}` line and one line of `not json` | `turns == 3`, `tool_calls == 2`, no exception |
+| Incremental: read the file above once, append one more `turn_end` line, read again | `turns == 4` |
+| **Incremental, proven**: read once; then overwrite the **first** line in place with a `{"type":"turn_end"}` line padded with spaces to exactly the same byte length; read again | counts **unchanged** — a reader that re-reads from byte 0 counts one extra turn; one that reads only the appended bytes does not |
+| Partial last line: file ends with `{"type":"turn_en` (no newline); read; then complete the line and append `\n`; read again | first read does not count it, second does — `turns` goes from the prior value to prior + 1 |
+| File shrinks below the stored offset | counts restart from zero and equal the counts of the new content |
+| No `events.jsonl` | `turns == 0`, `tool_calls == 0`, `last_activity_at is None`, `last_activity_seconds_ago is None` |
+| `last_activity_seconds_ago` | set the file's mtime with `os.utime` to `now − 42 s`; assert `42.0` (±0.5) |
+| Finished task with `run.json` `{"recorded_at": ..., "verify": {"passed": true}, "meaningful_pass": true, "diff": {"files_changed": 2, "lines_added": 10, "lines_removed": 3}, "events": {"turns": 7}, "worker": {"timed_out": false, "idle_timed_out": false}}` | `detail == {"verify_passed": True, "meaningful_pass": True, "files_changed": 2, "lines_added": 10, "lines_removed": 3, "turns": 7, "timed_out": False}` — the literal dict |
+| Finished task whose `run.json` has `recorded_at` only | every detail field is `None`, `timed_out` is `False`, no exception |
+| Finished review with `review.md` containing two `### FINDING` headings and one `#### FINDING` | `findings == 2` |
+| Finished review with no `review.md` | `findings == 0` |
+| Finished triage with `triage.json` `{"recorded_at": ..., "valid": true, "attempts": [{}, {}], "tasks": [{}, {}, {}], "triage": {"dispositions": [{"disposition": "fix"}, {"disposition": "fix"}, {"disposition": "drop"}]}}` | `detail == {"valid": True, "attempts": 2, "tasks": 3, "dispositions": {"fix": 2, "drop": 1}}` |
+| Finished triage with `valid: false` and no `triage` key | `dispositions == {}`, `tasks == 0` |
+| Three runs with pipeline `f03` (one running, two finished) and one run with no `pipeline` key | `groups` has two entries; the first is `{"pipeline": "f03", "running": 1, "finished": 2, "runs": [...3 ids newest first...]}`; the last has `"pipeline": None` |
+| Twelve finished `f03` runs | `recent` has 10, the `f03` group's `runs` has **12** |
+| `_format_duration` (or its successor) | `59.0 → "0:59"`, `3599.0 → "59:59"`, `3600.0 → "1:00:00"`, `3725.0 → "1:02:05"` |
+| `GET /` with a running run titled `Build <thing>` | body starts (after `<!DOCTYPE html>` and `<html>`/`<head>`) with a `<title>` containing `RUNNING: Build &lt;thing&gt;`, and `<body>`'s first element contains the same text |
+| `GET /` with nothing running and one finished run | `<title>` and status line contain `IDLE` and the finished run's `finished_at` |
+| `GET /` with a finished task whose `verify_passed` is false | the body contains `✗` (or `&#10007;`) in that row — pin the literal you render |
+| `GET /` | body contains `@media (max-width: 600px)` and `overflow-x` |
+| `GET /status.json` after the page has been served once | the JSON's `groups` and `detail` match `collect_status` for the same tree (remove `generated_at` and any `*_seconds_ago` fields before comparing) |
+| Read-only | snapshot the set of paths under the fixture before and after `collect_status` plus one `GET /` plus one `GET /status.json`; equal |
+
+## Out of scope
+
+- Do not modify `scripts/run_task.py`, `run_review.py`, `run_triage.py` or any existing file other
+  than the two named.
+- Do not add files under `evaluation/runs/`.
+- No third-party packages, no JavaScript, no external assets.
+- Do not remove or rename any key the f03 JSON already has; do not change `recent`'s cap.
+
+## Acceptance criteria
+
+- [ ] `python scripts/status_page.py status` against the real `evaluation/runs/` exits 0, prints
+      valid JSON, and its `groups` contains an entry with `"pipeline": "f03"` whose `runs` include
+      `f03-fix-08-frozen-clock`.
+- [ ] Every case in the table behaves as its source of truth requires.
+- [ ] The proven-incremental case **fails** if the reader is changed to always start from byte 0.
+      Verify this yourself: make that change, watch the test fail, restore, and quote the failure in
+      your summary.
+- [ ] `python -m ruff check scripts tests && python -m pytest -q` passes. Baseline on `main` is
+      **122 passed, 6 subtests passed**, ruff clean, so any other failure is a regression introduced
+      here.
+- [ ] Return a concise summary of what you built, the design choices you made and why, and
+      anything left unresolved.
+
+## Deliberately left to you
+
+- the exact HTML structure and CSS — it must read well on a phone and a desktop, and that is the
+  only requirement;
+- whether "started" shows UTC or local time — say which;
+- how the current-run panel looks when nothing is running;
+- whether `events.jsonl` is opened in binary and split on `\n` or read as text — the offset
+  arithmetic is simpler in binary.
+
+## Notes
+
+- `events.jsonl` lines are UTF-8; decode each line with `errors="replace"` before `json.loads`.
+- The cache is per process; the `status` subcommand starts cold every time, which is fine.
+- Existing conventions: `from __future__ import annotations`, `SCREAMING_CASE` constants, private
+  helpers prefixed `_`, `pathlib` only, `unittest.TestCase` with fixtures in `setUp` using
+  `tempfile.TemporaryDirectory()`. The existing `HttpServerTests` fixture is the one to extend.
+- Ruff runs before pytest; an unused import fails the acceptance command.
+- **Do not start `serve` from a shell during your work** — it never exits and the tool call hangs.
+  Exercise the server only through the tests.

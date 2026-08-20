@@ -1,0 +1,9 @@
+{
+  "kind": "review",
+  "task_id": "rv4-test-strength",
+  "title": "Review of worker/f04-status-page-detail (review-focus-test-strength)",
+  "started_at": "2026-08-20T06:45:43+00:00",
+  "pipeline": "f04",
+  "branch": "worker/f04-status-page-detail",
+  "axis": "review-focus-test-strength"
+}

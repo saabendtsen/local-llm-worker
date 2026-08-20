@@ -1,0 +1,32 @@
+{
+  "review_id": "rv4-test-strength",
+  "recorded_at": "2026-08-20T07:29:02+00:00",
+  "branch": "worker/f04-status-page-detail",
+  "base": "main",
+  "spec": "evaluation\\tasks\\f04-status-page-detail.md",
+  "harness": "pi",
+  "model": "local-worker/local-worker",
+  "elapsed_seconds": 2597.1,
+  "timed_out": false,
+  "idle_timed_out": false,
+  "exit_code": 0,
+  "events": {
+    "turns": 98,
+    "tool_calls": 100,
+    "tools_used": {
+      "bash": 49,
+      "edit": 37,
+      "read": 14
+    },
+    "malformed_event_lines": 0,
+    "errored_turns": 0
+  },
+  "prompt_delivery": {
+    "verified": true,
+    "sent_chars": 17727,
+    "received_chars": 17727,
+    "reason": null
+  },
+  "reviewer_modified_worktree": false,
+  "stderr_tail": ""
+}

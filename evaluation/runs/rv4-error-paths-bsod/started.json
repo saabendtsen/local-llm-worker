@@ -1,0 +1,9 @@
+{
+  "kind": "review",
+  "task_id": "rv4-error-paths",
+  "title": "Review of worker/f04-status-page-detail (review-focus-error-paths)",
+  "started_at": "2026-08-19T20:28:01+00:00",
+  "pipeline": "f04",
+  "branch": "worker/f04-status-page-detail",
+  "axis": "review-focus-error-paths"
+}

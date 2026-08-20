@@ -1,0 +1,10 @@
+{
+  "kind": "task",
+  "task_id": "f04-status-page-detail",
+  "title": "give the status page real detail \u2014 live progress, per-kind facts, pipeline grouping",
+  "started_at": "2026-08-19T19:41:15+00:00",
+  "pipeline": "f04",
+  "category": "feature-medium",
+  "branch": "worker/f04-status-page-detail",
+  "harness": "pi"
+}

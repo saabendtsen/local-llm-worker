@@ -1,0 +1,191 @@
+{
+  "reviews_read": [
+    "evaluation\\runs\\rv4-error-paths",
+    "evaluation\\runs\\rv4-consistency",
+    "evaluation\\runs\\rv4-test-strength",
+    "evaluation\\runs\\rv4-missing-coverage"
+  ],
+  "findings_parsed": 13,
+  "findings_after_filters": 13,
+  "findings_after_dedupe": 13,
+  "findings": [
+    {
+      "source": "rv4-missing-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/status_page.py, collect_status \u2014 running run fields (`turns`, `tool_calls`, `last_activity_at`, `last_activity_seconds_ago`)",
+      "severity": "high",
+      "confidence": "verified",
+      "requirement": "\"Each entry in `running` (and therefore `current`) gains: `turns` \u2014 the number of lines in the run's `events.jsonl` whose JSON object has `\"type\": \"turn_end\"`; `tool_calls` \u2014 likewise for `\"type\": \"tool_execution_end\"`.\"",
+      "gap": "The individual functions `_count_events_incremental` and `_last_activity_at` are tested in isolation, but no test verifies that `collect_status` actually includes these fields in the running run record. If `collect_status` silently dropped them, no test would catch it.",
+      "proof": "Removed `turns`, `tool_calls`, `last_activity_at`, and `last_activity_seconds_ago` from `collect_status`'s running-run output; the full suite of 71 tests still passes.",
+      "found_by": [
+        "rv4-missing-coverage"
+      ]
+    },
+    {
+      "source": "rv4-test-strength",
+      "axis": "test-strength",
+      "file": "scripts/status_page.py:291-293",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "`_format_detail` renders task detail in the HTML. Both `verify_passed=True` and `verify_passed=False` produce \"\u2717\". There is no test that checks for \"\u2713\" when `verify_passed=True`. The only HTML test for this area (`test_verify_passed_false_show_x`) only asserts \"\u2717\" with `verify_passed=False`, which is satisfied by either branch of the mutation.",
+      "mutation": "Changed `_format_detail` task branch: `if vp is True: parts.append(\"\u2717\")` and `elif vp is False: parts.append(\"\u2717\")` \u2014 both pass/fail render as \"\u2717\"",
+      "result": "71 passed",
+      "why": "A successfully verified task would display \"\u2717\" in the detail column, making it indistinguishable from a failed task. Users would see false negatives.",
+      "found_by": [
+        "rv4-test-strength"
+      ]
+    },
+    {
+      "source": "rv4-error-paths",
+      "axis": "error-paths",
+      "file": "scripts/status_page.py:381",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "TypeError escapes to user when `recorded_at` in `run.json` is not a string",
+      "why": "When a finished run's `run.json` has `\"recorded_at\": 99999` (a number instead of an ISO-8601 string), `datetime.fromisoformat(99999)` raises `TypeError`. The surrounding `except (KeyError, ValueError)` does not catch `TypeError`, so the traceback reaches the caller. This affects both `GET /` and `GET /status.json` through the HTTP handler.",
+      "repro": "python -c \"import tempfile,json; from pathlib import Path; d=tempfile.mkdtemp(); (Path(d)/'started.json').write_text(json.dumps({'kind':'task','task_id':'t','title':'T','started_at':'2026-08-19T10:00:00+00:00'})); (Path(d)/'run.json').write_text(json.dumps({'recorded_at':99999})))\" then call collect_status",
+      "evidence": "`TypeError: fromisoformat: argument must be str` \u2014 traceback printed to server stderr; HTTP client receives `RemoteDisconnected",
+      "found_by": [
+        "rv4-error-paths"
+      ]
+    },
+    {
+      "source": "rv4-error-paths",
+      "axis": "error-paths",
+      "file": "scripts/status_page.py:406-407",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "TypeError escapes when `started_at` is a non-string (e.g. number) or a naive ISO-8601 string (no tzinfo)",
+      "why": "Two distinct code paths both hit this: (a) `datetime.fromisoformat(12345)` raises `TypeError` \u2014 same root cause as Finding 1 but for the running-run path; (b) `datetime.fromisoformat('2026-08-19T10:00:00')` returns a naive datetime, then `now - started_dt` (where `now` is UTC-aware) raises `TypeError: can't subtract offset-naive and offset-aware datetimes`. Neither is caught by `except (KeyError, ValueError)`. A host that writes `started.json` without timezone info will silently crash the status page.",
+      "repro": "python -c \"import tempfile,json; from pathlib import Path; d=tempfile.mkdtemp(); (Path(d)/'started.json').write_text(json.dumps({'kind':'task','task_id':'t','title':'T','started_at':'2026-08-19T10:00:00'})))\" then call collect_status",
+      "evidence": "`TypeError: can't subtract offset-naive and offset-aware datetimes` \u2014 traceback to stderr; `RemoteDisconnected` on HTTP clients",
+      "found_by": [
+        "rv4-error-paths"
+      ]
+    },
+    {
+      "source": "rv4-test-strength",
+      "axis": "test-strength",
+      "file": "scripts/status_page.py:571-578",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "The `if current` / `elif result[\"recent\"]` chain determines whether the page header says \"RUNNING: \u2026\" or \"idle \u2014 last run finished \u2026\". Swapping the conditions means a page with both a running run and finished runs would incorrectly show \"idle\" instead of \"RUNNING\". No HTML test creates a fixture with both kinds of runs and verifies the status text; the fixture with a running run (`test_running_status_line`) has no finished runs, so `result[\"recent\"]` is empty and the `elif current` branch fires.",
+      "mutation": "Replaced `if current:` / `elif result[\"recent\"]:` with `if result[\"recent\"]:` / `elif current:` \u2014 checks for finished runs before checking for a running run",
+      "result": "71 passed",
+      "why": "When a pipeline is executing a new run while older runs are visible in the table, the page header would say \"idle\" and a user would not know something is running.",
+      "found_by": [
+        "rv4-test-strength"
+      ]
+    },
+    {
+      "source": "rv4-consistency",
+      "axis": "consistency",
+      "file": "scripts/status_page.py:655-662",
+      "severity": "high",
+      "confidence": "verified",
+      "problem": "Groups header counts (running/finished) include all runs from `all_runs`, but the HTML table iterates only `result[\"recent\"]` which contains finished runs only (capped at 10). Running runs never appear in any table row despite the header declaring them.",
+      "why": "`_serve_html` loops `for run in result[\"recent\"]` (line ~655), but `result[\"recent\"]` only holds finished runs \u2014 running runs are in `result[\"running\"]`, never in `recent`. The group header (`Pipeline: f03 (1 running, 2 finished)`) is built from `all_runs` which correctly counts running runs, so the header says \"1 running\" while the table shows 0 running rows. On 12+ finished runs the gap is wider: the group lists 12 runs but the table can only show 10.",
+      "repro": "Create 1 running run + 5 finished runs in pipeline \"f03\". Run: `python -c \"exec(open('/tmp/check2.py').read())\"` (standalone script in /tmp/check2.py)",
+      "evidence": "groups[\"f03\"][\"running\"] = 1, but HTML table iterates `result[\"recent\"]` (5 finished runs) and finds 0 running rows. The running run \"f03-run1\" is present in `groups[...][\"runs\"]` and `result[\"running\"]` but never rendered. With 12 finished runs: groups[\"f03\"][\"runs\"] has 12 entries, recent is capped at 10, table shows 10 rows \u2014 2 runs hidden.",
+      "found_by": [
+        "rv4-consistency"
+      ]
+    },
+    {
+      "source": "rv4-missing-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/status_page.py, _detail_review",
+      "severity": "medium",
+      "confidence": "verified",
+      "requirement": "\"Review detail: `timed_out` (as above)\" \u2014 the spec defines this as reading from `worker.timed_out` or `worker.idle_timed_out` when present, falling back to top-level keys.",
+      "gap": "`_detail_review` has a branch for `isinstance(worker, dict)` that reads `timed_out` from the worker dict, and an else branch for top-level keys. No test provides `worker` as a dict in terminal_data for a review run. The existing `test_review_findings` test uses minimal terminal data (only `recorded_at`) and only asserts on `findings`.",
+      "proof": "Made `_detail_review` always return `timed_out=True` regardless of input. All 71 tests pass unchanged because no review test asserts on `timed_out`.",
+      "found_by": [
+        "rv4-missing-coverage"
+      ]
+    },
+    {
+      "source": "rv4-missing-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/status_page.py, _format_duration",
+      "severity": "medium",
+      "confidence": "verified",
+      "requirement": "\"``59.0 \u2192 \"0:59\"``, ``3599.0 \u2192 \"59:59\"``, ``3600.0 \u2192 \"1:00:00\"``, ``3725.0 \u2192 \"1:02:05\"``.\"",
+      "gap": "Only 5.0, 0.0, 330.0, 3600.0, and 3723.0 are tested. The spec's boundary values 59.0, 3599.0, and 3725.0 have no test. An off-by-one in the boundary (< 3600 \u2192 < 3599) would cause 3599.0 to format as \"0:59:59\" instead of \"59:59\", and the existing suite would not detect it.",
+      "proof": "Changed `< 3600` to `< 3599` in `_format_duration`. `3599.0 \u2192 \"0:59:59\"` (wrong). All 71 tests pass unchanged. `3600.0` and `3723.0` still pass because they take the `h:mm:ss` branch even with the broken boundary.",
+      "found_by": [
+        "rv4-missing-coverage"
+      ]
+    },
+    {
+      "source": "rv4-test-strength",
+      "axis": "test-strength",
+      "file": "scripts/status_page.py:583-595",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "The current-run panel renders title, kind, id, pipeline, elapsed, turns, and tool calls from the `current` dict. No test verifies any of these individual values in the panel. `test_html_200_contains_current_title` only checks that the string \"Current run\" (the `<h2>` heading) is present. `test_running_status_line` and `test_html_escapes_html_in_title` check the status_text (which uses `current.get('title', '')` but is separate from the panel). If all panel values were empty strings, every test would pass.",
+      "mutation": "Replaced all `c_title`, `c_kind`, `c_id`, `c_pipeline`, `c_duration`, `c_turns`, `c_tool_calls` assignments with hardcoded empty/zero values instead of reading from `current",
+      "result": "71 passed",
+      "why": "The current-run panel would display blank fields (Title: , Kind: , ID: , etc.) even while a run is in progress. The status bar would show the title, but the detailed panel below would be empty.",
+      "found_by": [
+        "rv4-test-strength"
+      ]
+    },
+    {
+      "source": "rv4-error-paths",
+      "axis": "error-paths",
+      "file": "scripts/status_page.py:61",
+      "severity": "medium",
+      "confidence": "verified",
+      "problem": "`_format_duration` raises `ValueError` on NaN and `OverflowError` on infinity",
+      "why": "`int(seconds)` raises `ValueError` for `float('nan')` and `OverflowError` for `float('inf')`. In normal flow `duration_seconds` comes from `total_seconds()` on datetime arithmetic so these values are impossible. However the function is public, imported by tests, and callable directly \u2014 an external caller can trigger crashes.",
+      "repro": "python -c \"from status_page import _format_duration; _format_duration(float('nan'))\"",
+      "evidence": "`ValueError: cannot convert float NaN to integer` / `OverflowError: cannot convert float infinity to integer --- ### Additional observations (not defect-level) - **`_detail_triage` accepts any iterable for `attempts`**: `len(terminal_data.get(\"attempts\", []))` on a string like `\"not-a-list\"` returns 10. This is technically wrong but low risk \u2014 `valid` must be `True` for this code path, meaning a real triage JSON would have a list. - **Pipeline values of non-string type**: `pipeline: 0` or `pipeline: \"\"` pass through to the groups map as distinct keys. The spec says pipeline is \"the first dash-separated token\" \u2014 a non-string would be unusual but not broken. --- ### Summary of testing | Case | Tested? | How | |---|---|---| | 1. File does not exist | Yes | runs_dir non-existent, events.jsonl missing, review.md missing | | 2. Path is a directory | Yes | started.json as dir, events.jsonl as dir, review.md as dir | | 3. Not valid JSON | Yes | Garbage bytes, BOM, null bytes in review.md, binary events.jsonl | | 4. Valid JSON wrong shape | Yes | Array, scalar, empty object as started.json; non-dict JSON per events.jsonl line | | 5. Unreadable / permissions | Partial | Directory-as-file covers the principle; actual permission-denied not testable on Windows | | 6. Required arg absent / empty | Yes | No subcommand (exit 1), bad port (exit 2), empty port, empty datetime | | 7. Empty collection | Yes | Empty runs dir, empty attempts, empty tasks, empty events file | | 8. Value outside permitted set | Yes | NaN, infinity, negative duration, unknown kind, pipeline as int/empty string, 12 runs exceeding `recent` cap | SUMMARY: error-paths=3 blocking=2 cases-tested=8",
+      "found_by": [
+        "rv4-error-paths"
+      ]
+    },
+    {
+      "source": "rv4-missing-coverage",
+      "axis": "missing-coverage",
+      "file": "scripts/status_page.py, _format_detail \u2014 HTML rendering for review and triage kinds",
+      "severity": "low",
+      "confidence": "verified",
+      "requirement": "\"Detail column rendered from `detail` \u2014 for tasks `\u2713`/`\u2717` plus `+added/\u2212removed`, for reviews `<n> findings`, for triages `fix <n> \u00b7 test <n> \u00b7 defer <n> \u00b7 drop <n>`.\"",
+      "gap": "No test verifies the HTML output contains the rendered review detail (\"`<n>` findings\") or triage detail (\"fix N \u00b7 drop M\"). The `test_verify_passed_false_show_x` test only exercises the task `\u2717` path. The `\u2713` for `verify_passed=True` is also untested in HTML.",
+      "proof": "Made `_format_detail` return `\"\"` for both review and triage kinds. All 71 tests pass unchanged because no test checks the HTML body for review or triage detail text. SUMMARY: missing-coverage=4 blocking=2 requirements-listed=0 requirements-uncovered=4 restored=no",
+      "found_by": [
+        "rv4-missing-coverage"
+      ]
+    },
+    {
+      "source": "rv4-consistency",
+      "axis": "consistency",
+      "file": "tests/test_status_page.py:910-912",
+      "severity": "low",
+      "confidence": "verified",
+      "problem": "The test docstring says \"two ### FINDING and one #### FINDING \u2192 findings==2\" but the actual assertion is `findings == 3`, and the review.md content has three lines starting with \"### FINDING\" (one, two, four) and one line starting with \"#### FINDING\" (three). The assertion is correct; the docstring is misleading.",
+      "why": "The docstring states 2 but the content has 3 matching lines. The code correctly counts all lines starting with \"### FINDING\", yielding 3. The test passes with `self.assertEqual(detail[\"findings\"], 3)`. This is a documentation inconsistency, not a code bug.",
+      "repro": "Read line 910-912 of tests/test_status_page.py \u2014 docstring says 2, assertion says 3, code produces 3.",
+      "evidence": "review.md = \"### FINDING one\\n### FINDING two\\n#### FINDING three\\n### FINDING four\\n\". Lines starting with \"### FINDING\": 3. Test assertion: `findings == 3`. Docstring: \"\u2192 findings==2\". SUMMARY: consistency=2 blocking=1 relations-checked=5",
+      "found_by": [
+        "rv4-consistency"
+      ]
+    },
+    {
+      "source": "rv4-test-strength",
+      "axis": "test-strength",
+      "file": "scripts/status_page.py:711-712",
+      "severity": "low",
+      "confidence": "suspected",
+      "problem": "The spec says the status line should be \"the first element of `<body>`\". No test verifies this ordering. `test_html_title_matches_status_line` checks that the title text appears somewhere in the body, but not at the top. The status line could appear after the current panel and all tests would pass.",
+      "mutation": "Swapped `{status_text}` and `{current_panel}` in the HTML `<body>` template",
+      "result": "71 passed",
+      "why": "The status line would not be the first element of `<body>` as the spec requires. Users seeing the page from top to bottom would encounter the current-run panel before the overall status (RUNNING / IDLE). SUMMARY: test-strength=4 blocking=2 mutations-run=15 restored=yes",
+      "found_by": [
+        "rv4-test-strength"
+      ]
+    }
+  ]
+}
