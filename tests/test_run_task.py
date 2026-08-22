@@ -13,8 +13,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_task import (  # noqa: E402
     RUNS_DIR,
+    TaskError,
     is_runner_artifact,
     pipeline_of,
+    resolve_repo,
     task_title,
     write_started,
 )
@@ -73,3 +75,33 @@ class PipelineOfTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResolveRepoTests(unittest.TestCase):
+    """The review and triage runners used to default --repo to a fixed workspace
+    path while run_task.py read it from the spec. Omitting the flag then ran
+    `git diff <base>...<branch>` in a repository holding neither ref, which fails
+    as "unknown revision" -- it reads as a bad branch, not the wrong repository.
+    """
+
+    def _repo(self, tmp: str) -> Path:
+        repo = Path(tmp) / "repo"
+        (repo / ".git").mkdir(parents=True)
+        return repo
+
+    def test_defaults_to_the_spec_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(tmp)
+            self.assertEqual(resolve_repo(None, {"repo": str(repo)}), repo.resolve())
+
+    def test_explicit_override_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec_repo = self._repo(tmp)
+            other = Path(tmp) / "other"
+            (other / ".git").mkdir(parents=True)
+            self.assertEqual(resolve_repo(other, {"repo": str(spec_repo)}), other.resolve())
+
+    def test_rejects_a_path_that_is_not_a_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(TaskError):
+                resolve_repo(None, {"repo": tmp})

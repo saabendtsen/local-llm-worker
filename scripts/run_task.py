@@ -81,6 +81,24 @@ def parse_task(path: Path) -> tuple[dict[str, str], str]:
     return meta, body.strip()
 
 
+def resolve_repo(override: Path | None, meta: dict[str, str]) -> Path:
+    """The repository a run acts on: an explicit --repo, else the spec's `repo` field.
+
+    Defaulting to a fixed path was a footgun. run_task.py has always taken the
+    repository from the task frontmatter, but the review and triage runners
+    defaulted to the workspace root instead, so omitting --repo made
+    `git diff <base>...<branch>` run in a repository that holds neither ref. It
+    fails as "unknown revision", which reads like a bad branch name rather than
+    the wrong repository -- and it cost a chain launch to diagnose.
+    """
+    repo = (override if override is not None
+            else Path(os.path.expandvars(meta["repo"])))
+    repo = repo.expanduser().resolve()
+    if not (repo / ".git").exists():
+        raise TaskError(f"{repo} is not a Git repository")
+    return repo
+
+
 def task_title(body: str, fallback: str) -> str:
     """The task's heading, without the leading '# Task:' -- what a status page shows."""
     for line in body.splitlines():
@@ -576,10 +594,7 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
-    repo = Path(os.path.expandvars(meta["repo"])).expanduser().resolve()
-    if not (repo / ".git").exists():
-        print(f"ERROR: {repo} is not a Git repository", file=sys.stderr)
-        return 2
+    repo = resolve_repo(None, meta)
 
     task_id = args.id or meta["id"]
     run_dir = RUNS_DIR / task_id
