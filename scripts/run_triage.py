@@ -45,7 +45,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from run_task import RUNS_DIR, TaskError, git, parse_task, pipeline_of, write_started
+from run_task import (RUNS_DIR, TaskError, git, parse_task, pipeline_of, resolve_repo,
+                      write_started)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = REPO_ROOT / "prompts"
@@ -663,7 +664,9 @@ def main() -> int:
     parser.add_argument("--id", required=True, help="names the run directory")
     parser.add_argument("--frontier", required=True,
                         help="claude | codex | cmd:<shell template, prompt on stdin>")
-    parser.add_argument("--repo", type=Path, default=Path(r"C:\Dev\homelab"))
+    parser.add_argument("--repo", type=Path, default=None,
+                        help="repository holding the branch; defaults to the spec's "
+                             "`repo` frontmatter, as run_task.py already does")
     parser.add_argument("--model", default=None, help="passed through to the frontier CLI")
     parser.add_argument("--timeout", type=int, default=1800, help="per attempt, seconds")
     parser.add_argument("--max-attempts", type=int, default=2)
@@ -686,8 +689,8 @@ def main() -> int:
         print("ERROR: --max-attempts must be at least 1", file=sys.stderr)
         return 2
 
-    repo = args.repo.resolve()
     meta, spec_body = parse_task(args.spec)
+    repo = resolve_repo(args.repo, meta)
     base = args.base or meta.get("base", "experiment/74-local-llm-worker")
     prefix = args.task_prefix or meta["id"]
 

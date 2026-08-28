@@ -32,6 +32,7 @@ from run_task import (
     parse_task,
     pipeline_of,
     prompt_delivery,
+    resolve_repo,
     IDLE_TIMEOUT_DEFAULT,
     PROCESS_RULES,
     summarise_events,
@@ -84,7 +85,9 @@ def main() -> int:
     parser.add_argument("--branch", required=True, help="branch whose diff is reviewed")
     parser.add_argument("--spec", type=Path, required=True, help="task file the change answers")
     parser.add_argument("--id", required=True, help="names the run directory")
-    parser.add_argument("--repo", type=Path, default=Path(r"C:\Dev\homelab"))
+    parser.add_argument("--repo", type=Path, default=None,
+                        help="repository holding the branch; defaults to the spec's "
+                             "`repo` frontmatter, as run_task.py already does")
     parser.add_argument("--model", default="local-worker/local-worker")
     parser.add_argument("--harness", choices=("pi", "little-coder"), default="pi")
     parser.add_argument(
@@ -104,8 +107,8 @@ def main() -> int:
         print(f"ERROR: {run_dir} already exists; use a new id.", file=sys.stderr)
         return 2
 
-    repo = args.repo.resolve()
     meta, spec_body = parse_task(args.spec)
+    repo = resolve_repo(args.repo, meta)
     base = meta.get("base", "experiment/74-local-llm-worker")
 
     diff = git(repo, "diff", f"{base}...{args.branch}")
