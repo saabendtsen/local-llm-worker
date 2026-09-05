@@ -29,7 +29,8 @@ scripts\setup-chatbot.cmd
 ```
 
 This pins Open WebUI Desktop 0.0.20, moves its heavyweight runtime/data/cache to `D:\OpenWebUI`,
-disables the bundled llama.cpp server and Open Terminal, keeps port 8080 on loopback, and creates
+disables the bundled llama.cpp server, Open Terminal, and code interpreter, keeps port 8080 on
+loopback, preconfigures the independent llama.cpp endpoint plus keyless DDGS search, and creates
 the Tailscale Serve route. Open WebUI completes its managed backend installation on first launch.
 The script preserves unrelated Desktop preferences when updating its JSON configuration.
 
@@ -56,13 +57,13 @@ tailscale serve --https=443 off
 
 1. Create the first local account. It becomes the administrator; keep Open WebUI authentication
    enabled even though Tailscale also restricts network access.
-2. Open **Admin Settings > Connections > OpenAI-compatible** and add:
+2. Verify **Admin Settings > Connections > OpenAI-compatible** contains the preconfigured entry:
    - URL: `http://127.0.0.1:8000/v1`
    - API key: blank or `none`
    - Provider: `llama.cpp`
    - Model: `local-worker` (normally discovered through `/v1/models`)
-3. Open **Admin Settings > Web Search**, enable the feature, and choose **DDGS** with its `Auto`
-   backend. It needs no key or separate service.
+3. Verify **Admin Settings > Web Search** is enabled with **DDGS** and its `Auto` backend. It needs
+   no key or separate service.
 4. Edit the `local-worker` model: enable the **Web Search** capability and keep function calling
    on **Native**. Leave Web Search out of **Default Features** so new chats start offline.
 5. Leave Open Terminal, code interpreter, and filesystem integrations disabled for this chatbot

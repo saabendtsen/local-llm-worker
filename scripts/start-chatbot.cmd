@@ -21,6 +21,9 @@ if not exist "%OPEN_WEBUI_EXE%" (
     exit /b 1
 )
 
+python "%SCRIPT_DIR%configure_chatbot.py" --install-dir "%OPEN_WEBUI_DIR%"
+if errorlevel 1 exit /b %errorlevel%
+
 set "UV_CACHE_DIR=%OPEN_WEBUI_DIR%\uv-cache"
 set "TEMP=%OPEN_WEBUI_DIR%\tmp"
 set "TMP=%OPEN_WEBUI_DIR%\tmp"

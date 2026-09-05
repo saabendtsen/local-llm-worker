@@ -7,6 +7,7 @@ import subprocess
 import sys
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 LLAMA_MODELS_URL = "http://127.0.0.1:8000/v1/models"
@@ -31,11 +32,19 @@ def evaluate_status(
         problems.append("Open WebUI is unavailable")
     if not ui_listeners or any(address not in {"127.0.0.1", "::1"} for address in ui_listeners):
         problems.append("Open WebUI is not loopback-only")
-    llama_routed = any(route.get("proxy") == "http://127.0.0.1:8000" for route in serve_routes)
+    def proxy_port(route: dict[str, Any]) -> int | None:
+        try:
+            return urlparse(str(route.get("proxy", ""))).port
+        except ValueError:
+            return None
+
+    llama_routed = any(proxy_port(route) == 8000 for route in serve_routes)
     if llama_routed:
         problems.append("Tailscale exposes llama.cpp directly")
     ui_routed = any(
         route.get("https_port") == 443
+        and route.get("https") is True
+        and route.get("funnel") is not True
         and str(route.get("host", "")).endswith(".ts.net")
         and route.get("proxy") == "http://127.0.0.1:8080"
         for route in serve_routes
@@ -121,9 +130,21 @@ def _serve_routes() -> list[dict[str, Any]]:
             https_port = int(port_text)
         except ValueError:
             continue
+        tcp_config = payload.get("TCP", {}).get(port_text, {})
+        https_enabled = isinstance(tcp_config, dict) and tcp_config.get("HTTPS") is True
+        allow_funnel = payload.get("AllowFunnel", {})
+        funnel_enabled = isinstance(allow_funnel, dict) and allow_funnel.get(endpoint) is True
         for handler in web_config.get("Handlers", {}).values():
             if isinstance(handler, dict) and isinstance(handler.get("Proxy"), str):
-                routes.append({"host": host, "https_port": https_port, "proxy": handler["Proxy"]})
+                routes.append(
+                    {
+                        "host": host,
+                        "https_port": https_port,
+                        "https": https_enabled,
+                        "funnel": funnel_enabled,
+                        "proxy": handler["Proxy"],
+                    }
+                )
     return routes
 
 
