@@ -1,9 +1,16 @@
 # Phone-friendly chatbot UI for `local-worker`
 
-Research date: 2026-09-05. This is a setup recommendation only; nothing was installed or
-configured as part of this research.
+Research date: 2026-09-05. This records the initial options analysis, not the final runbook.
 
-## Recommendation
+## Implementation decision
+
+The trial ultimately uses **Open WebUI Desktop with its native managed backend**, not Docker.
+The Docker-to-loopback caveat below was material on this Windows host, while rebinding the
+unauthenticated llama.cpp API would weaken the intended boundary. The Desktop fallback keeps both
+services on `127.0.0.1`, puts heavyweight data on `D:\OpenWebUI`, and exposes only the UI through
+Tailscale Serve. See [agentic-chatbot.md](agentic-chatbot.md) for authoritative setup and operation.
+
+## Initial recommendation
 
 Use **Open WebUI in one Docker container**, connect it to the existing llama.cpp endpoint, and
 publish only the UI to the phone through **Tailscale Serve**. Start with Open WebUI's built-in

@@ -3,6 +3,7 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 if not defined OPEN_WEBUI_EXE set "OPEN_WEBUI_EXE=%LOCALAPPDATA%\Programs\open-webui\open-webui.exe"
+if not defined OPEN_WEBUI_DIR set "OPEN_WEBUI_DIR=D:\OpenWebUI"
 
 if /i "%~1"=="--dry-run" (
     echo Would start "%SCRIPT_DIR%start-worker.cmd" in its own terminal if local-worker is unavailable.
@@ -20,6 +21,9 @@ if not exist "%OPEN_WEBUI_EXE%" (
     exit /b 1
 )
 
+set "UV_CACHE_DIR=%OPEN_WEBUI_DIR%\uv-cache"
+set "TEMP=%OPEN_WEBUI_DIR%\tmp"
+set "TMP=%OPEN_WEBUI_DIR%\tmp"
 start "" "%OPEN_WEBUI_EXE%"
 echo Chatbot startup requested. Run scripts\check-chatbot.cmd after both services finish loading.
 exit /b 0

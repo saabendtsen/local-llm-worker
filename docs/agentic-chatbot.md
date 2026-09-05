@@ -22,6 +22,19 @@ llama.cpp API.
 
 ## Start and check
 
+For a new workstation, reproduce the installed Desktop configuration and private route first:
+
+```cmd
+scripts\setup-chatbot.cmd
+```
+
+This pins Open WebUI Desktop 0.0.20, moves its heavyweight runtime/data/cache to `D:\OpenWebUI`,
+disables the bundled llama.cpp server and Open Terminal, keeps port 8080 on loopback, and creates
+the Tailscale Serve route. Open WebUI completes its managed backend installation on first launch.
+The script preserves unrelated Desktop preferences when updating its JSON configuration.
+
+For ordinary use after setup:
+
 ```cmd
 scripts\start-chatbot.cmd
 scripts\check-chatbot.cmd
@@ -29,7 +42,8 @@ scripts\check-chatbot.cmd
 
 The start script starts the existing model runtime when needed and launches Open WebUI Desktop.
 The check script exits non-zero unless the `local-worker` model is available, both services are
-healthy, llama.cpp is loopback-only, and Tailscale routes only to the UI.
+healthy and loopback-only, and an exact Tailscale HTTPS route proxies to the UI without routing
+the llama.cpp API.
 
 Inspect or disable phone access:
 
@@ -77,5 +91,6 @@ On a phone connected to the same tailnet, open the private HTTPS URL. On iPhone 
 - C: was full during installation, so heavyweight runtime and mutable data intentionally live on
   D:. Do not reset the Desktop install/data paths to their AppData defaults.
 
-See [chatbot-ui-options.md](chatbot-ui-options.md) for the evaluated alternatives and primary
-sources behind this design.
+See [chatbot-ui-options.md](chatbot-ui-options.md) for the initial alternatives research. The
+implemented design uses its documented native fallback because that preserves loopback-only access
+between both Windows processes and avoids Docker bridge ambiguity.

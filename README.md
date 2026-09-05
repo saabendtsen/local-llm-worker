@@ -68,6 +68,7 @@ The same model endpoint can also run behind Open WebUI as a private, phone-frien
 user-toggleable agentic web search:
 
 ```cmd
+scripts\setup-chatbot.cmd
 scripts\start-chatbot.cmd
 scripts\check-chatbot.cmd
 ```
@@ -82,6 +83,7 @@ Tailscale URL, the search off/on/off acceptance check, and the security boundary
 | `scripts/start-worker.cmd` | Launch the runtime |
 | `scripts/check-worker.cmd` | Health, model list, and a real completion |
 | `scripts/bench-worker.cmd` | Throughput baseline |
+| `scripts/setup-chatbot.cmd` | Reproduce the Open WebUI Desktop and Tailscale boundary |
 | `scripts/start-chatbot.cmd` | Start the model runtime and Open WebUI Desktop |
 | `scripts/check-chatbot.cmd` | Verify chatbot health and private network exposure |
 | `scripts/run_task.py` | Execute one delegated task on a branch and record the evidence |

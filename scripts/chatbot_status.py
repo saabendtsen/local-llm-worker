@@ -18,7 +18,8 @@ def evaluate_status(
     llama_models: list[str],
     llama_listeners: list[str],
     ui_healthy: bool,
-    serve_targets: list[str],
+    ui_listeners: list[str],
+    serve_routes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Evaluate observable service state without mutating it."""
     problems: list[str] = []
@@ -28,18 +29,27 @@ def evaluate_status(
         problems.append("llama.cpp is not loopback-only")
     if not ui_healthy:
         problems.append("Open WebUI is unavailable")
-    if any(":8000" in target for target in serve_targets):
+    if not ui_listeners or any(address not in {"127.0.0.1", "::1"} for address in ui_listeners):
+        problems.append("Open WebUI is not loopback-only")
+    llama_routed = any(route.get("proxy") == "http://127.0.0.1:8000" for route in serve_routes)
+    if llama_routed:
         problems.append("Tailscale exposes llama.cpp directly")
-    ui_routed = any(":8080" in target for target in serve_targets)
+    ui_routed = any(
+        route.get("https_port") == 443
+        and str(route.get("host", "")).endswith(".ts.net")
+        and route.get("proxy") == "http://127.0.0.1:8080"
+        for route in serve_routes
+    )
     if not ui_routed:
-        problems.append("Open WebUI has no Tailscale Serve route")
+        problems.append("Open WebUI has no exact Tailscale HTTPS route")
     return {
         "healthy": not problems,
         "llama_models": llama_models,
         "llama_listeners": llama_listeners,
         "open_webui": ui_healthy,
-        "phone_route": "tailnet-only" if ui_routed and not any(":8000" in x for x in serve_targets) else "unsafe-or-missing",
-        "serve_targets": serve_targets,
+        "ui_listeners": ui_listeners,
+        "phone_route": "tailnet-only" if ui_routed and not llama_routed else "unsafe-or-missing",
+        "serve_routes": serve_routes,
         "problems": problems,
     }
 
@@ -57,9 +67,9 @@ def _llama_models() -> list[str]:
     return [str(item.get("id")) for item in payload.get("data", []) if isinstance(item, dict)]
 
 
-def _llama_listeners() -> list[str]:
+def _listeners(port: int) -> list[str]:
     command = (
-        "Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue "
+        f"Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue "
         "| Select-Object -ExpandProperty LocalAddress | ConvertTo-Json -Compress"
     )
     proc = subprocess.run(
@@ -77,6 +87,10 @@ def _llama_listeners() -> list[str]:
     return [str(parsed)] if isinstance(parsed, str) else [str(value) for value in parsed]
 
 
+def _llama_listeners() -> list[str]:
+    return _listeners(8000)
+
+
 def _ui_healthy() -> bool:
     try:
         payload = _get_json(OPEN_WEBUI_HEALTH_URL)
@@ -85,17 +99,7 @@ def _ui_healthy() -> bool:
     return payload.get("status") is True
 
 
-def _strings(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [item for child in value for item in _strings(child)]
-    if isinstance(value, dict):
-        return [item for child in value.values() for item in _strings(child)]
-    return []
-
-
-def _serve_targets() -> list[str]:
+def _serve_routes() -> list[dict[str, Any]]:
     proc = subprocess.run(
         ["tailscale.exe", "serve", "status", "--json"],
         capture_output=True,
@@ -105,9 +109,22 @@ def _serve_targets() -> list[str]:
     if proc.returncode:
         return []
     try:
-        return [value for value in _strings(json.loads(proc.stdout)) if value.startswith("http")]
+        payload = json.loads(proc.stdout)
     except ValueError:
         return []
+    routes: list[dict[str, Any]] = []
+    for endpoint, web_config in payload.get("Web", {}).items():
+        host, separator, port_text = endpoint.rpartition(":")
+        if not separator or not isinstance(web_config, dict):
+            continue
+        try:
+            https_port = int(port_text)
+        except ValueError:
+            continue
+        for handler in web_config.get("Handlers", {}).values():
+            if isinstance(handler, dict) and isinstance(handler.get("Proxy"), str):
+                routes.append({"host": host, "https_port": https_port, "proxy": handler["Proxy"]})
+    return routes
 
 
 def main() -> int:
@@ -115,7 +132,8 @@ def main() -> int:
         llama_models=_llama_models(),
         llama_listeners=_llama_listeners(),
         ui_healthy=_ui_healthy(),
-        serve_targets=_serve_targets(),
+        ui_listeners=_listeners(8080),
+        serve_routes=_serve_routes(),
     )
     print(json.dumps(result, indent=2))
     return 0 if result["healthy"] else 1
