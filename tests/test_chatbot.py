@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import subprocess
 import sys
@@ -59,16 +60,38 @@ class StartChatbotTests(unittest.TestCase):
         self.assertFalse(result["llamaCpp"]["enabled"])
         self.assertEqual(result["envVars"]["ENABLE_WEB_SEARCH"], "True")
         self.assertEqual(result["envVars"]["WEB_SEARCH_ENGINE"], "duckduckgo")
+        self.assertEqual(result["envVars"]["ENABLE_SUBAGENTS"], "True")
+        self.assertEqual(result["envVars"]["SUBAGENTS_BACKGROUND_ENABLED"], "False")
+        self.assertEqual(result["envVars"]["SUBAGENTS_MAX_CONCURRENT"], "1")
         self.assertEqual(result["envVars"]["ENABLE_CODE_INTERPRETER"], "False")
 
         backend = desired_backend_config(
-            {"user.permissions": {"features": {"notes": True, "code_interpreter": True}}}
+            {
+                "models.default_metadata": {
+                    "capabilities": {"vision": True},
+                    "prompt_suggestions": [{"title": "Keep me"}],
+                },
+                "models.default_params": {"temperature": 0.4},
+                "ui.default_interface_settings": {"theme": "dark"},
+                "user.permissions": {"features": {"notes": True, "code_interpreter": True}},
+            }
         )
         self.assertEqual(backend["openai.api_base_urls"], ["http://127.0.0.1:8000/v1"])
         self.assertTrue(backend["web.search.enable"])
         self.assertFalse(backend["code_interpreter.enable"])
         self.assertFalse(backend["code_execution.enable"])
-        self.assertFalse(backend["subagents.enable"])
+        self.assertTrue(backend["subagents.enable"])
+        self.assertFalse(backend["subagents.background_enabled"])
+        self.assertEqual(backend["subagents.max_concurrent"], 1)
+        self.assertEqual(backend["subagents.max_async"], 1)
+        self.assertEqual(backend["subagents.max_iterations"], 8)
+        self.assertEqual(backend["subagents.max_output"], 12000)
+        self.assertTrue(backend["models.default_metadata"]["capabilities"]["web_search"])
+        self.assertTrue(backend["models.default_metadata"]["capabilities"]["vision"])
+        self.assertEqual(backend["models.default_metadata"]["defaultFeatureIds"], ["web_search"])
+        self.assertEqual(backend["models.default_metadata"]["prompt_suggestions"], [{"title": "Keep me"}])
+        self.assertEqual(backend["models.default_params"], {"temperature": 0.4, "function_calling": "native"})
+        self.assertEqual(backend["ui.default_interface_settings"], {"theme": "dark", "webSearch": "always"})
         self.assertFalse(backend["user.permissions"]["features"]["code_interpreter"])
         self.assertTrue(backend["user.permissions"]["features"]["web_search"])
         self.assertTrue(backend["user.permissions"]["features"]["notes"])
@@ -99,6 +122,11 @@ class StartChatbotTests(unittest.TestCase):
                 connection.close()
             self.assertEqual(values["openai.api_base_urls"], '["http://127.0.0.1:8000/v1"]')
             self.assertEqual(values["code_interpreter.enable"], "false")
+            self.assertEqual(values["subagents.enable"], "true")
+            self.assertEqual(values["subagents.max_concurrent"], 1)
+            self.assertEqual(json.loads(values["models.default_metadata"]), {"capabilities": {"web_search": True}, "defaultFeatureIds": ["web_search"]})
+            self.assertEqual(json.loads(values["models.default_params"]), {"function_calling": "native"})
+            self.assertEqual(json.loads(values["ui.default_interface_settings"]), {"webSearch": "always"})
 
 
 class ChatbotStatusTests(unittest.TestCase):

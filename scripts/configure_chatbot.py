@@ -41,6 +41,12 @@ def desired_desktop_config(existing: dict[str, Any], install_dir: Path) -> dict[
                 "ENABLE_WEB_SEARCH": "True",
                 "WEB_SEARCH_ENGINE": "duckduckgo",
                 "DDGS_BACKEND": "auto",
+                "ENABLE_SUBAGENTS": "True",
+                "SUBAGENTS_BACKGROUND_ENABLED": "False",
+                "SUBAGENTS_MAX_CONCURRENT": "1",
+                "SUBAGENTS_MAX_ASYNC": "1",
+                "SUBAGENTS_MAX_ITERATIONS": "8",
+                "SUBAGENTS_MAX_OUTPUT": "12000",
                 "ENABLE_CODE_INTERPRETER": "False",
                 "USER_PERMISSIONS_FEATURES_CODE_INTERPRETER": "False",
                 "USER_PERMISSIONS_FEATURES_WEB_SEARCH": "True",
@@ -52,6 +58,18 @@ def desired_desktop_config(existing: dict[str, Any], install_dir: Path) -> dict[
 
 def desired_backend_config(existing: dict[str, Any]) -> dict[str, Any]:
     """Return the narrow Open WebUI policy owned by this experiment."""
+    default_metadata = dict(existing.get("models.default_metadata", {}))
+    capabilities = dict(default_metadata.get("capabilities", {}))
+    capabilities["web_search"] = True
+    default_metadata["capabilities"] = capabilities
+    default_metadata["defaultFeatureIds"] = ["web_search"]
+
+    default_params = dict(existing.get("models.default_params", {}))
+    default_params["function_calling"] = "native"
+
+    interface_settings = dict(existing.get("ui.default_interface_settings", {}))
+    interface_settings["webSearch"] = "always"
+
     permissions = dict(existing.get("user.permissions", {}))
     features = dict(permissions.get("features", {}))
     features.update({"web_search": True, "code_interpreter": False, "direct_tool_servers": False})
@@ -66,8 +84,15 @@ def desired_backend_config(existing: dict[str, Any]) -> dict[str, Any]:
         "web.search.ddgs_backend": "auto",
         "code_interpreter.enable": False,
         "code_execution.enable": False,
-        "subagents.enable": False,
+        "subagents.enable": True,
         "subagents.background_enabled": False,
+        "subagents.max_concurrent": 1,
+        "subagents.max_async": 1,
+        "subagents.max_iterations": 8,
+        "subagents.max_output": 12000,
+        "models.default_metadata": default_metadata,
+        "models.default_params": default_params,
+        "ui.default_interface_settings": interface_settings,
         "terminal_server.connections": [],
         "tool_server.connections": [],
         "user.permissions": permissions,
