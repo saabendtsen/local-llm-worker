@@ -89,6 +89,26 @@ the right trade. Set `NCMOE=35` if the GPU is otherwise idle and generation spee
 Measure warm, not cold. Generation on the first request after load ran at 19.8 tok/s and settled
 around 25 tok/s by the third; a single cold reading will understate the configuration by 20%.
 
+### Verifying the lock actually took
+
+`mlock` is best-effort. `VirtualLock` is bounded by the process working-set quota, so a runtime
+started on an already-contended machine warns once and then serves with **pageable** weights. The
+expert tensors then fault off the SSD per token and generation drops from ~25 tok/s to under 1,
+while `/health` still returns 200 and a short completion still comes back — so it presents as a
+hung or stupid model rather than as an environment fault.
+
+`check-worker.cmd` therefore asserts the resident set against a `MIN_LOCKED_GB` floor (12 by
+default; the expected figure is ~17 GB for Q4_K_M at `NCMOE=38`) and fails rather than warning.
+Start the runtime first, on a quiet machine, and treat a failure here as a reason not to score the
+run at all.
+
+The other claimant on this machine's 32 GB is WSL2, which hosts the homelab CI and deployment
+runner lanes. Those lanes pin a keep-alive process inside the distribution, so the utility VM never
+idles out and never returns its high-water mark on its own; uncapped it drifts toward the ~50%
+default. `%USERPROFILE%\.wslconfig` caps it at 8 GB with `autoMemoryReclaim=gradual` so a
+containerised browser suite cannot squeeze the locked weights. Lane jobs arrive on GitHub's
+schedule, not yours, so this is a configured bound rather than something to time around.
+
 ### When it does not fit
 
 Three settings compete for the same 7.1 GB of usable VRAM: `NCMOE` (lower keeps more experts on
