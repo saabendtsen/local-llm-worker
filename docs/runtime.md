@@ -129,7 +129,7 @@ the result still holds.
 
 | Setting | Guide | Here | Why |
 | --- | --- | --- | --- |
-| `--host` | `0.0.0.0` | `127.0.0.1` | The endpoint has **no authentication**. Binding it to every interface would expose an unauthenticated model server to the whole network. Loopback is the correct default; exposing it later must be a deliberate decision, not an inherited flag. |
+| `--host` | `0.0.0.0` | `127.0.0.1` | On loopback the endpoint has **no authentication**. Binding every interface would expose an unauthenticated model server to the whole network, so `0.0.0.0` is refused. Loopback is the default; serving the LAN is the deliberate, key-guarded "LAN mode" below. |
 | CORS | not set (`*`) | `--cors-origins localhost` | llama-server allows **all** origins by default and warns about it at startup. With the default, any page in a running browser can call the loopback endpoint cross-origin *and read the response* — a stranger's site using your GPU and seeing what it produced. Restricting to localhost withholds the `Access-Control-Allow-Origin` header from foreign origins, so the browser refuses to hand the response back to the page. Verified: an `Origin: https://evil.example.com` request gets no such header, `http://localhost:8000` gets it reflected. Note this is a browser-enforced control — it stops pages reading replies, not a non-browser client from calling the port. The built-in web UI still works, and Cline is unaffected since it sends no `Origin` header. |
 | `-ncmoe` | `35` | `38` | 1.8 GB more VRAM headroom for ~7% of generation speed. See [VRAM headroom](#vram-headroom). |
 | Quant | Q5_K_M | Q4_K_M | Combined with `mlock`, Q5_K_M would leave ~5 GB of RAM for the OS and harness. See [Model](#model). |
@@ -156,6 +156,26 @@ Check it:
 ```cmd
 scripts\check-worker.cmd
 ```
+
+## LAN mode (serving the homelab server)
+
+The homelab server's `agent-local` runner lane runs Pi and reaches this model over the wired LAN ([homelab-workspace#334](https://github.com/saabendtsen/homelab-workspace/issues/334), [#360](https://github.com/saabendtsen/homelab-workspace/issues/360)). Loopback stays the default. LAN mode is a deliberate, separate entry point with three guards:
+
+| Guard | How |
+| --- | --- |
+| Bind the LAN address, never every interface | `scripts\start-worker-lan.cmd` sets `HOST=192.168.0.204` (override with `LAN_HOST`). `start-worker.cmd` refuses `0.0.0.0` outright, which also keeps the endpoint off Tailscale. |
+| Require a key | Any non-loopback `HOST` refuses to start without `%USERPROFILE%\.local-worker\api-key`, which is passed as `--api-key-file`, so the key never appears on a command line. Create it once with `powershell -File scripts\new-api-key.ps1` (owner-only ACL, never printed). `/health` stays unauthenticated; that's what the lane's preflight probes. |
+| Admit only the server | `scripts\lan-firewall.ps1 -Apply` (elevated) allows TCP 8000 from `192.168.0.100` only. It also disables the program-level **Block** rules Windows creates when its first-run prompt is dismissed: the Ethernet profile here is Public, and Block beats Allow, which silently broke the first LAN spike twice. `-Status` shows the relevant rules; `-Remove` undoes both. |
+
+Hand the key to the server lane without echoing it:
+
+```powershell
+gh secret set LOCAL_WORKER_API_KEY --repo Wibholm-solutions/sandcastle-wayfinder-pilot < "$env:USERPROFILE\.local-worker\api-key"
+```
+
+Both machines need DHCP reservations on the router (dev PC `192.168.0.204`, server `192.168.0.100`), because the firewall rule and the lane's route name those addresses.
+
+Measured over the LAN on 2026-09-26 ([#338](https://github.com/saabendtsen/homelab-workspace/issues/338)): the Pi smoke test answered in 9 s, and two real TDD tasks finished in 2 min 44 s and 3 min 36 s.
 
 ## Benchmarking
 
