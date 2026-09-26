@@ -24,6 +24,27 @@ rem valve. A run once spent its entire 32k output budget reasoning about a
 rem three-line fix and returned nothing after 23 minutes, and because it changed
 rem nothing the already-green suite still reported success. -1 is unrestricted.
 if not defined THINK_MAX  set "THINK_MAX=4096"
+rem Bearer key for any non-loopback bind. Kept outside the repository (this repo is
+rem public) and passed by file so it never appears on a command line. /health stays
+rem unauthenticated, which is what the server lane's preflight probes.
+if not defined APIKEY_FILE set "APIKEY_FILE=%USERPROFILE%\.local-worker\api-key"
+
+set "AUTH_ARGS="
+set "LOOPBACK="
+if /i "%HOST%"=="127.0.0.1" set "LOOPBACK=1"
+if /i "%HOST%"=="localhost" set "LOOPBACK=1"
+if defined LOOPBACK goto auth_done
+if /i "%HOST%"=="0.0.0.0" (
+    echo ERROR: refusing to bind every interface. Bind the LAN address instead, see docs\runtime.md.
+    exit /b 1
+)
+if not exist "%APIKEY_FILE%" (
+    echo ERROR: HOST=%HOST% is not loopback, so an API key is required and "%APIKEY_FILE%" is missing.
+    echo Create one with: powershell -File scripts\new-api-key.ps1
+    exit /b 1
+)
+set "AUTH_ARGS=--api-key-file "%APIKEY_FILE%""
+:auth_done
 
 if not exist "%LLAMA_BIN%" (
     echo ERROR: llama-server not found at "%LLAMA_BIN%".
@@ -44,6 +65,7 @@ echo   endpoint : http://%HOST%:%PORT%/v1  (model name: %ALIAS%)
 echo   context  : %CTX%    cpu-moe layers: %NCMOE%    threads: %THREADS%
 echo   batch    : %BATCH% / %UBATCH%    load mode: %LOADMODE%
 echo   thinking : effort=%EFFORT%  budget=%THINK_MAX%
+if defined LOOPBACK (echo   auth     : none ^(loopback^)) else (echo   auth     : API key from %APIKEY_FILE%)
 echo.
 
 "%LLAMA_BIN%" ^
@@ -65,6 +87,6 @@ echo.
     --reasoning-effort %EFFORT% ^
     --reasoning-budget %THINK_MAX% ^
     -np 1 ^
-    --jinja
+    --jinja %AUTH_ARGS%
 
 endlocal
