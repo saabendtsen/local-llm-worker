@@ -62,6 +62,20 @@ Then run a task:
 scripts\run-task.cmd evaluation\tasks\0001-example.md
 ```
 
+## Agentic chatbot
+
+The same model endpoint can also run behind Open WebUI as a private, phone-friendly chatbot with
+user-toggleable agentic web search:
+
+```cmd
+scripts\setup-chatbot.cmd
+scripts\start-chatbot.cmd
+scripts\check-chatbot.cmd
+```
+
+See [docs/agentic-chatbot.md](docs/agentic-chatbot.md) for first-time configuration, the private
+Tailscale URL, the search off/on/off acceptance check, and the security boundary.
+
 ## Layout
 
 | Path | Purpose |
@@ -69,6 +83,9 @@ scripts\run-task.cmd evaluation\tasks\0001-example.md
 | `scripts/start-worker.cmd` | Launch the runtime |
 | `scripts/check-worker.cmd` | Health, model list, and a real completion |
 | `scripts/bench-worker.cmd` | Throughput baseline |
+| `scripts/setup-chatbot.cmd` | Reproduce the Open WebUI Desktop and Tailscale boundary |
+| `scripts/start-chatbot.cmd` | Start the model runtime and Open WebUI Desktop |
+| `scripts/check-chatbot.cmd` | Verify chatbot health and private network exposure |
 | `scripts/run_task.py` | Execute one delegated task on a branch and record the evidence |
 | `scripts/run_batch.py` | Several atomic tasks on one branch, with a circuit breaker |
 | `scripts/run_review.py` | Fresh-context review of a diff, in a dedicated worktree; `--prompt` picks the axis |
